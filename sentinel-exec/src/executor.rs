@@ -340,14 +340,7 @@ impl CommandExecutor {
             // `None` means deny all.
             None => Err(ExecError::NotAllowed(command.to_string())),
             Some(set) => {
-                // Also match on the basename so that full paths like
-                // `/usr/bin/ls` are matched against `"ls"` in the allowlist.
-                let basename = PathBuf::from(command)
-                    .file_name()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| command.to_string());
-
-                if set.contains(command) || set.contains(&basename) {
+                if set.contains(command) {
                     Ok(())
                 } else {
                     Err(ExecError::NotAllowed(command.to_string()))
@@ -407,10 +400,16 @@ mod tests {
     }
 
     #[test]
-    fn basename_matching() {
+    fn basename_does_not_bypass_allowlist() {
+        // "/usr/bin/echo" must NOT match an allowlist entry of "echo".
         let exec = CommandExecutor::new(allow(&["echo"]));
         let result = exec.dry_run_validate("/usr/bin/echo", &[]).unwrap();
-        assert!(result.valid, "basename 'echo' should match allowlist entry");
+        assert!(!result.valid, "full path should not match bare basename in allowlist");
+
+        // Only the exact string is matched.
+        let exec2 = CommandExecutor::new(allow(&["/usr/bin/echo"]));
+        let result2 = exec2.dry_run_validate("/usr/bin/echo", &[]).unwrap();
+        assert!(result2.valid, "exact full path should be allowed");
     }
 
     #[test]

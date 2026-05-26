@@ -430,13 +430,28 @@ impl ReasoningLoop {
                 ApprovalDecision::Rejected { .. } => "rejected",
                 ApprovalDecision::Pending => "pending",
             };
-            log.append(AuditEventType::PlanApproved {
-                plan_id: plan.id,
-                approval_mode: mode.to_string(),
-            })
-            .await
-            .map_err(|e| AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string())))?;
+            match &approval {
+                ApprovalDecision::Rejected { reason } => {
+                    log.append(AuditEventType::PlanRejected {
+                        plan_id: plan.id,
+                        reason: reason.clone(),
+                    })
+                    .await
+                    .map_err(|e| AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string())))?;
+                }
+                _ => {
+                    log.append(AuditEventType::PlanApproved {
+                        plan_id: plan.id,
+                        approval_mode: mode.to_string(),
+                    })
+                    .await
+                    .map_err(|e| AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string())))?;
+                }
+            }
         }
+
+        // Apply the approval parameter to the plan so the gate reads the caller-supplied decision.
+        plan.approval = approval.clone();
 
         // Check approval is valid.
         if !plan.is_approved() {

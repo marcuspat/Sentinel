@@ -7,6 +7,7 @@
 
 use std::path::PathBuf;
 use tokio::process::Command;
+use tracing::warn;
 
 /// Sandbox configuration for process isolation.
 #[derive(Debug, Clone, Default)]
@@ -15,9 +16,8 @@ pub struct SandboxConfig {
     pub read_only_paths: Vec<PathBuf>,
     /// Paths the child may write (advisory; not kernel-enforced here).
     pub writable_paths: Vec<PathBuf>,
-    /// If `true`, the child's network access is flagged as denied
-    /// (actual enforcement requires a network namespace or seccomp, which
-    /// is outside the scope of this crate's rlimit-based approach).
+    /// NOT enforced by rlimits — requires Linux network namespaces or seccomp
+    /// BPF, which are outside scope; setting this field emits a warning.
     pub deny_network: bool,
     /// If `true`, `RLIMIT_NPROC` is set to 64 to prevent fork bombs.
     pub deny_new_processes: bool,
@@ -39,6 +39,13 @@ pub struct SandboxConfig {
 /// `execve`.  It must be async-signal-safe.  The `nix` functions used
 /// (`setrlimit`) are documented as safe in this context.
 pub fn apply_sandbox(cmd: &mut Command, config: &SandboxConfig) {
+    if config.deny_network {
+        warn!(
+            "deny_network is set but NOT enforced at the rlimit level; \
+             network isolation requires Linux network namespaces or seccomp BPF"
+        );
+    }
+
     let deny_new_processes = config.deny_new_processes;
 
     // SAFETY: pre_exec runs after fork(), before execve().  Only

@@ -150,12 +150,21 @@ impl Capability for ProcessKill {
         if !pid.is_number() {
             return Err(CoreError::InvalidArgs("'pid' must be a number".into()));
         }
-        if pid.as_f64().map(|v| v <= 0.0).unwrap_or(true) {
-            return Err(CoreError::InvalidArgs("'pid' must be a positive integer".into()));
+        if pid.as_f64().map(|v| v <= 1.0).unwrap_or(true) {
+            return Err(CoreError::InvalidArgs("'pid' must be > 1 (PID 1 is reserved)".into()));
         }
+        const ALLOWED_SIGNALS: &[&str] = &[
+            "TERM", "KILL", "HUP", "INT", "QUIT", "USR1", "USR2", "CONT", "STOP",
+        ];
         if let Some(sig) = args.get("signal") {
             if !sig.is_string() {
                 return Err(CoreError::InvalidArgs("'signal' must be a string".into()));
+            }
+            let sig_str = sig.as_str().unwrap();
+            if !ALLOWED_SIGNALS.contains(&sig_str) {
+                return Err(CoreError::InvalidArgs(
+                    format!("'signal' must be one of: {}", ALLOWED_SIGNALS.join(", "))
+                ));
             }
         }
         Ok(())
@@ -647,9 +656,21 @@ mod tests {
     }
 
     #[test]
+    fn process_kill_pid_1_rejected() {
+        let cap = ProcessKill::new(make_executor());
+        assert!(cap.validate_args(&json!({ "pid": 1 })).is_err());
+    }
+
+    #[test]
     fn process_kill_bad_signal_type() {
         let cap = ProcessKill::new(make_executor());
-        assert!(cap.validate_args(&json!({ "pid": 1, "signal": 9 })).is_err());
+        assert!(cap.validate_args(&json!({ "pid": 1234, "signal": 9 })).is_err());
+    }
+
+    #[test]
+    fn process_kill_invalid_signal_name() {
+        let cap = ProcessKill::new(make_executor());
+        assert!(cap.validate_args(&json!({ "pid": 1234, "signal": "INVALID" })).is_err());
     }
 
     // ServiceStatus

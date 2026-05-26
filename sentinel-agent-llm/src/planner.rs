@@ -153,6 +153,10 @@ impl CapabilityRequestParser {
     /// ```json
     /// {"done_investigating": true, "reasoning": "..."}
     /// ```
+    ///
+    /// NOTE: `capability_id` is validated here for format (non-empty, safe
+    /// characters only), but existence validation against the registry is
+    /// performed by the caller (ReasoningLoop) before invocation.
     pub fn parse(llm_response: &str) -> Result<InvestigationAction, AgentError> {
         let value = PlanParser::extract_json(llm_response)?;
 
@@ -181,9 +185,9 @@ impl CapabilityRequestParser {
             })?
             .to_string();
 
-        if capability_id.is_empty() {
+        if capability_id.is_empty() || !capability_id.chars().all(|c| c.is_alphanumeric() || matches!(c, '.' | '_' | '-')) {
             return Err(AgentError::InvalidResponse(
-                "investigation response 'capability_id' is empty".to_string(),
+                "capability_id contains invalid characters".to_string(),
             ));
         }
 

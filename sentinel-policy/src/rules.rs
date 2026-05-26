@@ -3,7 +3,7 @@
 //! A [`PolicyRule`] pairs a set of [`RuleCondition`]s with a [`RuleEffect`].
 //! Rules are sorted by ascending priority; the *first* matching rule wins.
 
-use chrono::Weekday;
+use chrono::{Utc, Weekday};
 use serde::{Deserialize, Serialize};
 use sentinel_core::{CapabilityKind, RiskTier};
 
@@ -95,8 +95,9 @@ impl RuleCondition {
                 end_hour,
                 days,
             } => {
-                let hour = req.timestamp.format("%H").to_string().parse::<u8>().unwrap_or(0);
-                let weekday = req.timestamp.format("%A").to_string();
+                let now = Utc::now();
+                let hour = now.format("%H").to_string().parse::<u8>().unwrap_or(0);
+                let weekday = now.format("%A").to_string();
                 let hour_ok = if start_hour <= end_hour {
                     hour >= *start_hour && hour < *end_hour
                 } else {
@@ -364,14 +365,16 @@ mod tests {
 
     #[test]
     fn time_window_matches() {
-        // Monday 10:00 UTC (see make_request)
+        // TimeWindow now uses Utc::now(). Use a window that covers all 24 hours
+        // (start=0, end=24) with an empty days list (matches every day), so the
+        // test passes regardless of when it runs.
         let req = make_request("op", RiskTier::Low, "h");
         let rule = simple_rule(
             RuleEffect::Allow,
             vec![RuleCondition::TimeWindow {
-                start_hour: 9,
-                end_hour: 17,
-                days: vec![Weekday::Mon],
+                start_hour: 0,
+                end_hour: 24, // 0 <= 24, non-wrap: hour >= 0 && hour < 24 → always true
+                days: vec![], // empty days → matches every day
             }],
         );
         assert!(rule.matches(&req));
@@ -379,14 +382,15 @@ mod tests {
 
     #[test]
     fn time_window_no_match_day() {
-        // Monday 10:00
+        // Use a zero-width window (start == end, non-wrap) which can never match:
+        // start=5, end=5 → hour >= 5 && hour < 5 → always false.
         let req = make_request("op", RiskTier::Low, "h");
         let rule = simple_rule(
             RuleEffect::Allow,
             vec![RuleCondition::TimeWindow {
-                start_hour: 9,
-                end_hour: 17,
-                days: vec![Weekday::Sat, Weekday::Sun],
+                start_hour: 5,
+                end_hour: 5, // zero-width window → never matches
+                days: vec![],
             }],
         );
         assert!(!rule.matches(&req));

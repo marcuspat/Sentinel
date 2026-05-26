@@ -3,6 +3,34 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use tracing::debug;
 
+fn validate_safe_path(path: &str) -> Result<(), CoreError> {
+    if path.is_empty() {
+        return Err(CoreError::InvalidArgs("path must not be empty".into()));
+    }
+    // Must be absolute
+    if !path.starts_with('/') {
+        return Err(CoreError::InvalidArgs("path must be absolute".into()));
+    }
+    // Block traversal sequences
+    if path.contains("..") {
+        return Err(CoreError::InvalidArgs("path must not contain '..'".into()));
+    }
+    // Block critical system directories
+    const BLOCKED_PREFIXES: &[&str] = &[
+        "/etc", "/boot", "/sys", "/proc", "/dev",
+        "/bin", "/sbin", "/usr/bin", "/usr/sbin", "/lib", "/lib64",
+        "/run/systemd",
+    ];
+    for blocked in BLOCKED_PREFIXES {
+        if path == *blocked || path.starts_with(&format!("{}/", blocked)) {
+            return Err(CoreError::InvalidArgs(
+                format!("path '{}' is in a protected system directory", path)
+            ));
+        }
+    }
+    Ok(())
+}
+
 use sentinel_core::{
     Capability, CapabilityKind, CapabilityManifest, CapabilityResult, CoreError, ExecutionContext,
     RiskTier,
@@ -146,10 +174,11 @@ impl Capability for LogVacuum {
     }
 
     fn validate_args(&self, args: &Value) -> Result<(), CoreError> {
-        args.get("log_dir")
+        let log_dir = args.get("log_dir")
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
             .ok_or_else(|| CoreError::InvalidArgs("'log_dir' must be a non-empty string".into()))?;
+        validate_safe_path(log_dir)?;
         let days = args
             .get("older_than_days")
             .ok_or_else(|| CoreError::InvalidArgs("'older_than_days' is required".into()))?;
@@ -313,6 +342,12 @@ impl Capability for CachePrune {
             .ok_or_else(|| CoreError::InvalidArgs("'cache_dirs' is required".into()))?;
         if !dirs.is_array() {
             return Err(CoreError::InvalidArgs("'cache_dirs' must be an array".into()));
+        }
+        for (i, dir) in dirs.as_array().unwrap().iter().enumerate() {
+            let path = dir.as_str().ok_or_else(|| CoreError::InvalidArgs(
+                format!("cache_dirs[{}] must be a string", i)
+            ))?;
+            validate_safe_path(path)?;
         }
         Ok(())
     }

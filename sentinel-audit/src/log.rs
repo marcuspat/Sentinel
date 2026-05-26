@@ -91,8 +91,8 @@ impl AuditLog {
                 .append(true)
                 .open(path)
                 .await?;
-            file.write_all(line.as_bytes()).await?;
-            file.write_all(b"\n").await?;
+            let line_with_newline = format!("{}\n", line);
+            file.write_all(line_with_newline.as_bytes()).await?;
             file.flush().await?;
             debug!(sequence, "audit event persisted to {:?}", path);
         }

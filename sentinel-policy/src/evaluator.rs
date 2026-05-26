@@ -184,13 +184,7 @@ impl PolicyEvaluator {
             return None;
         }
 
-        // Kill switch only blocks mutating capabilities; read-only ops may
-        // still pass through so that operators can still inspect the system.
-        let is_mutating = matches!(req.capability_kind, CapabilityKind::Mutating);
-        if !is_mutating {
-            return None;
-        }
-
+        // Kill switch blocks all capabilities, regardless of kind.
         let reason = self
             .kill_switch
             .reason()
@@ -409,14 +403,14 @@ mod tests {
     }
 
     #[test]
-    fn kill_switch_allows_read() {
+    fn kill_switch_blocks_read() {
         let ks = KillSwitch::new();
         ks.activate("emergency stop");
         let evaluator = PolicyEvaluator::new(vec![allow_all_low_rule()], ks, vec![]);
-        // Read capability is not mutating → allowed despite kill switch
+        // Kill switch blocks all capabilities regardless of kind.
         let req = make_request("disk_usage", CapabilityKind::ReadOnly, RiskTier::Low);
         let decision = evaluator.evaluate(req);
-        assert_eq!(decision.effect, PolicyEffect::Allowed);
+        assert!(matches!(decision.effect, PolicyEffect::Denied { .. }));
     }
 
     #[test]

@@ -290,9 +290,9 @@ mod tests {
         let d2 = evaluator.evaluate(req("write_file", CapabilityKind::Mutating, RiskTier::Low));
         assert!(matches!(d2.effect, PolicyEffect::Denied { .. }));
 
-        // Read still works
+        // Kill switch blocks read-only ops too
         let d3 = evaluator.evaluate(req("disk_usage", CapabilityKind::ReadOnly, RiskTier::Low));
-        assert_eq!(d3.effect, PolicyEffect::Allowed);
+        assert!(matches!(d3.effect, PolicyEffect::Denied { .. }));
     }
 
     #[test]
