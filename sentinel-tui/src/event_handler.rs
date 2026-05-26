@@ -1,0 +1,311 @@
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use uuid::Uuid;
+
+use crate::app::{App, SessionUpdate, StepStatus, Tab};
+
+/// Events that the TUI event loop dispatches.
+#[derive(Debug, Clone)]
+pub enum AppEvent {
+    /// A keyboard input event from crossterm.
+    Key(KeyEvent),
+    /// Periodic clock tick used to refresh the UI.
+    Tick,
+    /// An update from the running background agent session.
+    SessionUpdate(SessionUpdate),
+    /// The agent has proposed a new plan.
+    PlanProposed(crate::app::Plan),
+    /// A plan step's status changed.
+    ExecutionProgress { step_id: Uuid, status: StepStatus },
+}
+
+/// Process a single `AppEvent`, mutating `app` state accordingly.
+///
+/// Returns `Ok(())` in all normal cases.  Returns `Err` only on I/O errors
+/// that prevent the TUI from continuing.
+pub async fn handle_events(
+    app: &mut App,
+    event: AppEvent,
+) -> Result<(), anyhow::Error> {
+    match event {
+        AppEvent::Key(key) => handle_key(app, key),
+        AppEvent::Tick => {
+            // Periodic tick — nothing to do for now.  Could be used to refresh
+            // external state or animate progress indicators.
+        }
+        AppEvent::SessionUpdate(update) => {
+            app.apply_session_update(update);
+        }
+        AppEvent::PlanProposed(plan) => {
+            app.apply_session_update(SessionUpdate::PlanProposed(plan));
+        }
+        AppEvent::ExecutionProgress { step_id, status } => {
+            app.apply_session_update(SessionUpdate::StepCompleted { step_id, status });
+        }
+    }
+    Ok(())
+}
+
+/// Handle a raw keyboard event.
+fn handle_key(app: &mut App, key: KeyEvent) {
+    // Ctrl-C or Ctrl-Q always quits, regardless of tab.
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        match key.code {
+            KeyCode::Char('c') | KeyCode::Char('q') => {
+                app.should_quit = true;
+                return;
+            }
+            _ => {}
+        }
+    }
+
+    match key.code {
+        // ── Global quit ───────────────────────────────────────────────────
+        KeyCode::Char('q') | KeyCode::Esc => {
+            // On the Goal tab, Esc clears the input; on other tabs it quits.
+            if app.current_tab == Tab::Goal && key.code == KeyCode::Esc {
+                app.goal_input.clear();
+                app.input_cursor = 0;
+            } else {
+                app.should_quit = true;
+            }
+        }
+
+        // ── Tab navigation ────────────────────────────────────────────────
+        KeyCode::Tab => app.next_tab(),
+        KeyCode::BackTab => app.prev_tab(),
+
+        // ── Scrolling ─────────────────────────────────────────────────────
+        KeyCode::Down | KeyCode::Char('j') => {
+            match app.current_tab {
+                Tab::Plan => app.plan_scroll_down(),
+                _ => app.scroll_log_down(),
+            }
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            match app.current_tab {
+                Tab::Plan => app.plan_scroll_up(),
+                _ => app.scroll_log_up(),
+            }
+        }
+
+        // ── Plan approval actions ─────────────────────────────────────────
+        KeyCode::Char('a') => {
+            if app.current_tab == Tab::Plan {
+                app.approve_all();
+            }
+        }
+        KeyCode::Char('s') => {
+            // Step-by-step approval: approve the currently selected step.
+            if app.current_tab == Tab::Plan {
+                let idx = app.plan_view.selected_index;
+                app.approve_step(idx);
+            }
+        }
+        KeyCode::Char('r') => {
+            if app.current_tab == Tab::Plan {
+                app.reject_plan("Rejected by operator.".into());
+            }
+        }
+
+        // ── Goal input (only on Goal tab) ─────────────────────────────────
+        KeyCode::Enter => {
+            if app.current_tab == Tab::Goal {
+                // Start with a default host; in a real session the host would
+                // come from the CLI arguments already stored in app state.
+                let host = "localhost".to_string();
+                app.start_session(host, false);
+            }
+        }
+        KeyCode::Char(c) => {
+            if app.current_tab == Tab::Goal {
+                // Insert character at cursor position.
+                app.goal_input.insert(app.input_cursor, c);
+                app.input_cursor += 1;
+            }
+        }
+        KeyCode::Backspace => {
+            if app.current_tab == Tab::Goal && app.input_cursor > 0 {
+                app.input_cursor -= 1;
+                app.goal_input.remove(app.input_cursor);
+            }
+        }
+        KeyCode::Left => {
+            if app.input_cursor > 0 {
+                app.input_cursor -= 1;
+            }
+        }
+        KeyCode::Right => {
+            if app.input_cursor < app.goal_input.len() {
+                app.input_cursor += 1;
+            }
+        }
+
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    fn key_with_mod(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    // ── Quit ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn q_sets_should_quit_on_non_goal_tab() {
+        let mut app = App::new();
+        app.current_tab = Tab::Execution;
+        handle_key(&mut app, key(KeyCode::Char('q')));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn ctrl_c_sets_should_quit() {
+        let mut app = App::new();
+        handle_key(
+            &mut app,
+            key_with_mod(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        );
+        assert!(app.should_quit);
+    }
+
+    // ── Tab navigation ────────────────────────────────────────────────────────
+
+    #[test]
+    fn tab_key_advances_tab() {
+        let mut app = App::new();
+        let initial = app.current_tab;
+        handle_key(&mut app, key(KeyCode::Tab));
+        assert_ne!(app.current_tab, initial);
+    }
+
+    #[test]
+    fn back_tab_retreats_tab() {
+        let mut app = App::new();
+        app.current_tab = Tab::Plan;
+        handle_key(&mut app, key(KeyCode::BackTab));
+        assert_eq!(app.current_tab, Tab::Investigation);
+    }
+
+    // ── Goal input ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn char_keys_append_to_goal_on_goal_tab() {
+        let mut app = App::new();
+        handle_key(&mut app, key(KeyCode::Char('f')));
+        handle_key(&mut app, key(KeyCode::Char('i')));
+        handle_key(&mut app, key(KeyCode::Char('x')));
+        assert_eq!(app.goal_input, "fix");
+    }
+
+    #[test]
+    fn backspace_removes_last_char() {
+        let mut app = App::new();
+        app.goal_input = "ab".into();
+        app.input_cursor = 2;
+        handle_key(&mut app, key(KeyCode::Backspace));
+        assert_eq!(app.goal_input, "a");
+    }
+
+    #[test]
+    fn enter_starts_session_when_goal_is_set() {
+        let mut app = App::new();
+        app.goal_input = "restart sshd".into();
+        handle_key(&mut app, key(KeyCode::Enter));
+        assert!(app.session.is_some());
+        assert_eq!(app.current_tab, Tab::Investigation);
+    }
+
+    // ── Plan approval ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn a_key_approves_all_on_plan_tab() {
+        use crate::app::{Plan, PlanStep};
+        use sentinel_core::RiskTier;
+        let mut app = App::new();
+        app.current_tab = Tab::Plan;
+        let plan = Plan::new(
+            "test",
+            vec![PlanStep::new(
+                "step1",
+                "cap1",
+                serde_json::json!({}),
+                RiskTier::Low,
+            )],
+        );
+        app.plan_view.load_plan(&plan);
+        handle_key(&mut app, key(KeyCode::Char('a')));
+        assert!(app.plan_view.steps[0].approved);
+    }
+
+    #[test]
+    fn r_key_rejects_plan_on_plan_tab() {
+        let mut app = App::new();
+        app.current_tab = Tab::Plan;
+        app.session = Some(crate::app::Session::new("g", "h", false));
+        handle_key(&mut app, key(KeyCode::Char('r')));
+        assert!(matches!(
+            app.plan_view.approval_mode,
+            Some(crate::app::ApprovalDecision::Reject { .. })
+        ));
+    }
+
+    // ── Scroll ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn j_key_scrolls_down_on_investigation_tab() {
+        let mut app = App::new();
+        app.current_tab = Tab::Investigation;
+        handle_key(&mut app, key(KeyCode::Char('j')));
+        assert_eq!(app.log_scroll, 1);
+    }
+
+    #[test]
+    fn k_key_scrolls_up_on_investigation_tab() {
+        let mut app = App::new();
+        app.current_tab = Tab::Investigation;
+        app.log_scroll = 3;
+        handle_key(&mut app, key(KeyCode::Char('k')));
+        assert_eq!(app.log_scroll, 2);
+    }
+
+    // ── Async handle_events ───────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn handle_tick_is_noop() {
+        let mut app = App::new();
+        handle_events(&mut app, AppEvent::Tick).await.unwrap();
+        assert!(!app.should_quit);
+    }
+
+    #[tokio::test]
+    async fn handle_session_update_event() {
+        let mut app = App::new();
+        app.session = Some(crate::app::Session::new("g", "h", false));
+        handle_events(
+            &mut app,
+            AppEvent::SessionUpdate(SessionUpdate::SessionCompleted),
+        )
+        .await
+        .unwrap();
+        assert_eq!(app.current_tab, Tab::Audit);
+    }
+}

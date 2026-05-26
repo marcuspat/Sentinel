@@ -1,0 +1,99 @@
+[workspace]
+members = [
+    "sentinel-core",
+    "sentinel-exec",
+    "sentinel-policy",
+    "sentinel-capabilities",
+    "sentinel-agent-llm",
+    "sentinel-audit",
+    "sentinel-tui",
+    "sentinel-fleet",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/marcuspat/Sentinel"
+authors = ["Sentinel Contributors"]
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+tokio-util = { version = "0.7", features = ["full"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging / tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Async traits
+async-trait = "0.1"
+
+# UUID
+uuid = { version = "1.6", features = ["v4", "serde"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Crypto / hashing
+sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
+rustls-pemfile = "1.0"
+
+# CLI
+clap = { version = "4.4", features = ["derive", "env"] }
+
+# TLS
+rustls = { version = "0.22", features = ["ring"] }
+tokio-rustls = "0.25"
+rcgen = "0.12"
+
+# HTTP client
+reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
+
+# Metrics
+prometheus = { version = "0.13", features = ["process"] }
+
+# Process management
+nix = { version = "0.27", features = ["process", "signal", "fs", "resource"] }
+
+# TUI
+ratatui = "0.26"
+crossterm = "0.27"
+
+# Testing
+criterion = { version = "0.5", features = ["html_reports"] }
+mockall = "0.12"
+tempfile = "3.9"
+wiremock = "0.6"
+
+# Workspace crates
+sentinel-core = { path = "sentinel-core" }
+sentinel-exec = { path = "sentinel-exec" }
+sentinel-policy = { path = "sentinel-policy" }
+sentinel-capabilities = { path = "sentinel-capabilities" }
+sentinel-agent-llm = { path = "sentinel-agent-llm" }
+sentinel-audit = { path = "sentinel-audit" }
+sentinel-tui = { path = "sentinel-tui" }
+sentinel-fleet = { path = "sentinel-fleet" }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+
+[profile.bench]
+opt-level = 3
+debug = true

@@ -1,0 +1,21 @@
+[package]
+name = "sentinel-capabilities"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sentinel-core = { workspace = true }
+sentinel-exec = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tempfile = { workspace = true }
+mockall = { workspace = true }
