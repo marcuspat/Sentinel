@@ -22,7 +22,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
             Constraint::Min(0),    // main content
             Constraint::Length(1), // status bar
         ])
-        .split(frame.size());
+        .split(frame.area());
 
     render_header(frame, chunks[0], app);
     render_tabs(frame, chunks[1], app);

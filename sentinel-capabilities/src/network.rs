@@ -102,7 +102,7 @@ impl Capability for NetworkConnections {
                     true
                 }
             })
-            .map(|l| Self::parse_connection_line(l))
+            .map(Self::parse_connection_line)
             .collect();
 
         let count = connections.len();

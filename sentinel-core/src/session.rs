@@ -179,14 +179,13 @@ impl Session {
     /// Take a checkpoint of the current session state.
     pub fn checkpoint(&self) -> SessionCheckpoint {
         let snapshot = serde_json::to_value(self)
-            .unwrap_or_else(|_| serde_json::Value::Null);
-        let cp = SessionCheckpoint {
+            .unwrap_or(serde_json::Value::Null);
+        SessionCheckpoint {
             checkpoint_id: uuid::Uuid::new_v4(),
             phase: self.phase.clone(),
             snapshot,
             timestamp: chrono::Utc::now(),
-        };
-        cp
+        }
     }
 
     /// Restore a session from a previously taken checkpoint.

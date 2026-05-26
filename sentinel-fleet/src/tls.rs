@@ -112,6 +112,7 @@ impl FleetTls {
         key_pem: &str,
         ca_cert_pem: &str,
     ) -> Result<Arc<rustls::ServerConfig>, FleetError> {
+        rustls::crypto::ring::default_provider().install_default().ok();
         let cert_der = Self::pem_to_der(cert_pem)?;
         let key_der = Self::pem_key_to_der(key_pem)?;
         let ca_der = Self::pem_to_der(ca_cert_pem)?;
@@ -148,6 +149,7 @@ impl FleetTls {
         key_pem: &str,
         pinned_fingerprint: &str,
     ) -> Result<Arc<rustls::ClientConfig>, FleetError> {
+        rustls::crypto::ring::default_provider().install_default().ok();
         let cert_der = Self::pem_to_der(cert_pem)?;
         let key_der = Self::pem_key_to_der(key_pem)?;
 
@@ -173,12 +175,10 @@ impl FleetTls {
     /// Decode the first PEM block in `pem` and return the raw DER bytes.
     fn pem_to_der(pem: &str) -> Result<Vec<u8>, FleetError> {
         let mut reader = std::io::BufReader::new(pem.as_bytes());
-        let items = rustls_pemfile::read_all(&mut reader)
-            .map_err(|e| FleetError::Certificate(e.to_string()))?;
-
-        for item in items {
+        for item in rustls_pemfile::read_all(&mut reader) {
+            let item = item.map_err(|e| FleetError::Certificate(e.to_string()))?;
             if let rustls_pemfile::Item::X509Certificate(der) = item {
-                return Ok(der);
+                return Ok(der.to_vec());
             }
         }
         Err(FleetError::Certificate(
@@ -189,14 +189,12 @@ impl FleetTls {
     /// Decode a PEM-encoded private key and return the raw DER bytes.
     fn pem_key_to_der(pem: &str) -> Result<Vec<u8>, FleetError> {
         let mut reader = std::io::BufReader::new(pem.as_bytes());
-        let items = rustls_pemfile::read_all(&mut reader)
-            .map_err(|e| FleetError::Certificate(e.to_string()))?;
-
-        for item in items {
+        for item in rustls_pemfile::read_all(&mut reader) {
+            let item = item.map_err(|e| FleetError::Certificate(e.to_string()))?;
             match item {
-                rustls_pemfile::Item::RSAKey(k) => return Ok(k),
-                rustls_pemfile::Item::PKCS8Key(k) => return Ok(k),
-                rustls_pemfile::Item::ECKey(k) => return Ok(k),
+                rustls_pemfile::Item::Pkcs1Key(k) => return Ok(k.secret_pkcs1_der().to_vec()),
+                rustls_pemfile::Item::Pkcs8Key(k) => return Ok(k.secret_pkcs8_der().to_vec()),
+                rustls_pemfile::Item::Sec1Key(k) => return Ok(k.secret_sec1_der().to_vec()),
                 _ => continue,
             }
         }

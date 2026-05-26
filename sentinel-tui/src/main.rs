@@ -157,30 +157,15 @@ async fn run_app(
 fn list_capabilities() {
     println!("Available capabilities:");
     println!("{:-<60}", "");
-    println!(
-        "  {:<35} [{:<9}] Risk: {}",
-        "sentinel.fs.read_file", "ReadOnly", "Low"
-    );
+    println!("  {:<35} [{:<9}] Risk: Low", "sentinel.fs.read_file", "ReadOnly");
     println!("    Read the contents of a file from the target system.");
-    println!(
-        "  {:<35} [{:<9}] Risk: {}",
-        "sentinel.fs.write_file", "Mutating", "High"
-    );
+    println!("  {:<35} [{:<9}] Risk: High", "sentinel.fs.write_file", "Mutating");
     println!("    Write or overwrite a file on the target system.");
-    println!(
-        "  {:<35} [{:<9}] Risk: {}",
-        "sentinel.svc.status", "ReadOnly", "Low"
-    );
+    println!("  {:<35} [{:<9}] Risk: Low", "sentinel.svc.status", "ReadOnly");
     println!("    Query the status of a systemd service.");
-    println!(
-        "  {:<35} [{:<9}] Risk: {}",
-        "sentinel.svc.restart", "Mutating", "Medium"
-    );
+    println!("  {:<35} [{:<9}] Risk: Medium", "sentinel.svc.restart", "Mutating");
     println!("    Restart a systemd service.");
-    println!(
-        "  {:<35} [{:<9}] Risk: {}",
-        "sentinel.exec.run_command", "Mutating", "High"
-    );
+    println!("  {:<35} [{:<9}] Risk: High", "sentinel.exec.run_command", "Mutating");
     println!("    Execute an arbitrary shell command.");
 }
 

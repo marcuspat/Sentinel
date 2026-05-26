@@ -183,7 +183,7 @@ fn glob_match_chars(p: &[char], t: &[char]) -> bool {
 /// Walk a dot-separated `path` inside a JSON value and return the string at
 /// that leaf.  Returns `None` when the path does not exist or isn't a string
 /// or number.
-fn json_path_get<'a>(value: &'a serde_json::Value, path: &str) -> Option<String> {
+fn json_path_get(value: &serde_json::Value, path: &str) -> Option<String> {
     let mut cur = value;
     for key in path.split('.') {
         cur = cur.get(key)?;

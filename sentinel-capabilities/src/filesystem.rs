@@ -365,7 +365,7 @@ impl Capability for CachePrune {
         let mut actions: Vec<Value> = Vec::new();
 
         if let Some((prog, pm_args)) = self.detect_pkg_manager(&ctx.env_overrides).await {
-            let arg_refs: Vec<&str> = pm_args.iter().map(|s| *s).collect();
+            let arg_refs: Vec<&str> = pm_args.to_vec();
             match self
                 .executor
                 .run(prog, &arg_refs, &ctx.env_overrides, ctx.resource_limits.max_output_bytes)
