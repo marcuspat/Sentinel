@@ -1,0 +1,33 @@
+[package]
+name = "sentinel-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "sentinel"
+path = "src/main.rs"
+
+[dependencies]
+sentinel-core = { workspace = true }
+sentinel-agent-llm = { workspace = true }
+sentinel-policy = { workspace = true }
+sentinel-audit = { workspace = true }
+sentinel-capabilities = { workspace = true }
+sentinel-fleet = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
