@@ -12,6 +12,7 @@
 //! 4. **Act** — each plan step is policy-checked and executed in sequence.
 //!    Failures may trigger rollback of completed steps.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -20,7 +21,7 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use sentinel_audit::{AuditEventType, AuditLog};
-use sentinel_core::{ApprovalDecision, ExecutionContext, Plan, StepStatus};
+use sentinel_core::{ApprovalDecision, Capability, ExecutionContext, Plan, StepStatus};
 use sentinel_policy::{PolicyEffect, PolicyEvaluator, PolicyRequest};
 
 use crate::backend::{LlmBackend, Message};
@@ -81,6 +82,7 @@ pub struct ExecutionSummary {
 pub struct ReasoningLoop {
     backend: Box<dyn LlmBackend>,
     capability_registry: Arc<CapabilityRegistry>,
+    capability_impls: HashMap<String, Box<dyn Capability>>,
     policy_evaluator: Arc<PolicyEvaluator>,
     audit_log: Arc<Mutex<AuditLog>>,
     config: ReasoningConfig,
@@ -98,10 +100,25 @@ impl ReasoningLoop {
         Self {
             backend,
             capability_registry,
+            capability_impls: HashMap::new(),
             policy_evaluator,
             audit_log,
             config,
         }
+    }
+
+    /// Register concrete capability implementations for real dispatch.
+    ///
+    /// Without this, [`invoke_capability`](Self::invoke_capability) falls back
+    /// to stub results.  Supplying real implementations wires the loop to
+    /// actual capability execution (via the underlying executor).
+    pub fn with_capabilities(mut self, capabilities: Vec<Box<dyn Capability>>) -> Self {
+        self.capability_impls = capabilities
+            .into_iter()
+            .map(|cap| (cap.manifest().id.clone(), cap))
+            .collect();
+        info!(count = self.capability_impls.len(), "capability implementations registered");
+        self
     }
 
     // ── Investigate phase ─────────────────────────────────────────────────────
@@ -629,8 +646,17 @@ impl ReasoningLoop {
                         "attempting rollback"
                     );
 
-                    // In a real implementation we'd call the capability's inverse().
-                    // Here we mark the step as rolled back and audit it.
+                    // Invoke the capability's inverse to actually undo the effect.
+                    if let Some(cap) = self.capability_impls.get(&capability_id) {
+                        let rb_ctx = ExecutionContext::new(session_id, host);
+                        match cap.invoke_inverse(plan.steps[step_idx].args.clone(), &rb_ctx).await {
+                            Some(sentinel_core::CapabilityResult::Success { .. }) => info!(capability_id = %capability_id, "rollback succeeded"),
+                            Some(sentinel_core::CapabilityResult::Failure { error, .. }) => warn!(capability_id = %capability_id, error = %error, "rollback failed"),
+                            None => info!(capability_id = %capability_id, "capability has no inverse"),
+                            _ => {}
+                        }
+                    }
+
                     plan.steps[step_idx].status = StepStatus::RolledBack;
                     steps_completed -= 1;
                     steps_rolled_back += 1;
@@ -692,20 +718,18 @@ impl ReasoningLoop {
         &self,
         _session_id: Uuid,
         capability_id: &str,
-        _args: &serde_json::Value,
-        _ctx: &ExecutionContext,
+        args: &serde_json::Value,
+        ctx: &ExecutionContext,
     ) -> Result<sentinel_core::CapabilityResult, AgentError> {
-        // In a real deployment, this would look up the capability by ID and
-        // call capability.invoke(args, ctx).  For the LLM crate we return a
-        // stub result so tests can exercise the loop without real capabilities.
-        debug!(
-            capability_id = %capability_id,
-            "stub capability invocation (no capability executor wired up)"
-        );
-        Ok(sentinel_core::CapabilityResult::success(serde_json::json!({
-            "stub": true,
-            "capability_id": capability_id
-        })))
+        if let Some(cap) = self.capability_impls.get(capability_id) {
+            let result = cap.invoke(args.clone(), ctx).await;
+            Ok(result)
+        } else {
+            debug!(capability_id = %capability_id, "stub invocation — no implementation registered");
+            Ok(sentinel_core::CapabilityResult::success(serde_json::json!({
+                "stub": true, "capability_id": capability_id
+            })))
+        }
     }
 }
 

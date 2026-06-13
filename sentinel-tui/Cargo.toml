@@ -14,6 +14,7 @@ sentinel-agent-llm = { workspace = true }
 sentinel-policy = { workspace = true }
 sentinel-audit = { workspace = true }
 sentinel-capabilities = { workspace = true }
+sentinel-exec = { workspace = true }
 sentinel-fleet = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
