@@ -1,4 +1,5 @@
 use std::io;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -10,6 +11,17 @@ use crossterm::{
 };
 use ratatui::prelude::*;
 use tracing_subscriber::{fmt, EnvFilter};
+
+use sentinel_agent_llm::{
+    AnthropicBackend, CapabilityRegistry, LlmBackend, OpenAiBackend, ReasoningConfig, ReasoningLoop,
+};
+use sentinel_audit::AuditLog;
+use sentinel_capabilities::all_capabilities;
+use sentinel_core::ApprovalDecision;
+use sentinel_exec::RealCommandExecutor;
+use sentinel_policy::default_policy;
+use tokio::sync::Mutex;
+use uuid::Uuid;
 
 use sentinel_tui::{
     app::App,
@@ -57,6 +69,9 @@ enum Commands {
         /// Enable dry-run mode (no real changes made)
         #[arg(long)]
         dry_run: bool,
+        /// Skip the interactive approval prompt and execute immediately
+        #[arg(long)]
+        auto_approve: bool,
     },
     /// List available capabilities
     Capabilities,
@@ -93,13 +108,19 @@ async fn main() -> Result<()> {
             goal,
             host,
             dry_run,
+            auto_approve,
         } => {
-            println!(
-                "sentinel run: goal='{}' host='{}' dry_run={}",
-                goal, host, dry_run
-            );
-            println!("Interactive run mode requires an LLM backend.");
-            println!("Set ANTHROPIC_API_KEY or OPENAI_API_KEY and try again.");
+            run_agent(
+                goal,
+                host,
+                dry_run,
+                auto_approve,
+                &cli.backend,
+                cli.anthropic_api_key.as_deref(),
+                cli.openai_api_key.as_deref(),
+                &cli.model,
+            )
+            .await?
         }
     }
 
@@ -154,23 +175,161 @@ async fn run_app(
 
 // ── Subcommand handlers ───────────────────────────────────────────────────────
 
+/// Wire the full agent stack — LLM backend, executor, capabilities, registry,
+/// policy, audit log — and drive an investigate → plan → approve → act session.
+#[allow(clippy::too_many_arguments)]
+async fn run_agent(
+    goal: String,
+    host: String,
+    dry_run: bool,
+    auto_approve: bool,
+    backend_name: &str,
+    anthropic_api_key: Option<&str>,
+    openai_api_key: Option<&str>,
+    model: &str,
+) -> Result<()> {
+    let session_id = Uuid::new_v4();
+
+    // 1. LLM backend.
+    let backend: Box<dyn LlmBackend> = match backend_name {
+        "anthropic" => {
+            let key = anthropic_api_key.ok_or_else(|| {
+                anyhow::anyhow!("ANTHROPIC_API_KEY is required for the anthropic backend")
+            })?;
+            Box::new(AnthropicBackend::new(key.to_string(), model.to_string()))
+        }
+        "openai" => {
+            let key = openai_api_key.ok_or_else(|| {
+                anyhow::anyhow!("OPENAI_API_KEY is required for the openai backend")
+            })?;
+            Box::new(OpenAiBackend::new(key.to_string(), model.to_string()))
+        }
+        other => {
+            return Err(anyhow::anyhow!(
+                "unknown backend '{other}'; expected 'anthropic' or 'openai'"
+            ))
+        }
+    };
+
+    // 2. Executor + real capability implementations.
+    let executor = Arc::new(RealCommandExecutor);
+    let caps = all_capabilities(executor);
+
+    // 3. Registry of capability manifests (for prompt/planning).
+    let mut registry = CapabilityRegistry::new();
+    for cap in &caps {
+        registry.register(cap.manifest().clone());
+    }
+    let registry = Arc::new(registry);
+
+    // 4. Policy + audit log (persisted to a per-session JSONL file).
+    let policy = Arc::new(default_policy());
+    let audit_path = std::path::PathBuf::from(format!("sentinel-audit-{session_id}.jsonl"));
+    let audit = Arc::new(Mutex::new(AuditLog::new(session_id, Some(audit_path.clone()))));
+
+    // 5. Reasoning loop wired with the concrete capabilities.
+    let agent = ReasoningLoop::new(
+        backend,
+        registry,
+        policy,
+        Arc::clone(&audit),
+        ReasoningConfig::default(),
+    )
+    .with_capabilities(caps);
+
+    println!("Sentinel session {session_id}");
+    println!("Goal    : {goal}");
+    println!("Host    : {host}");
+    println!("Backend : {backend_name} ({model})");
+    println!();
+
+    // Investigate.
+    println!("── Investigating ──");
+    let observations = agent.investigate(session_id, &goal, &host).await?;
+    println!("Collected {} observation(s).", observations.len());
+
+    // Plan.
+    println!("\n── Planning ──");
+    let mut plan = agent.plan(session_id, &goal, &observations).await?;
+    println!("Rationale    : {}", plan.rationale);
+    println!("Overall risk : {:?}", plan.overall_risk);
+    println!("Steps ({}):", plan.steps.len());
+    for (i, step) in plan.steps.iter().enumerate() {
+        println!(
+            "  {}. [{}] {} (risk {:?})",
+            i + 1,
+            step.capability_id,
+            step.description,
+            step.risk_tier
+        );
+    }
+
+    if dry_run {
+        println!("\nDry-run mode: plan generated but NOT executed.");
+        println!("Audit log written to {}", audit_path.display());
+        return Ok(());
+    }
+
+    // Approve.
+    let approval = if auto_approve {
+        println!("\nAuto-approve enabled — executing plan.");
+        ApprovalDecision::FullApproval
+    } else {
+        use std::io::Write as _;
+        print!("\nApprove and execute this plan? [y/N] ");
+        io::stdout().flush()?;
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        if matches!(input.trim().to_lowercase().as_str(), "y" | "yes") {
+            ApprovalDecision::FullApproval
+        } else {
+            ApprovalDecision::Rejected {
+                reason: "operator declined at the approval prompt".to_string(),
+            }
+        }
+    };
+
+    if let ApprovalDecision::Rejected { reason } = &approval {
+        println!("Plan rejected: {reason}");
+        println!("Audit log written to {}", audit_path.display());
+        return Ok(());
+    }
+
+    // Act.
+    println!("\n── Executing ──");
+    let summary = agent
+        .execute_plan(session_id, &host, &mut plan, approval)
+        .await?;
+    println!(
+        "Done: {} completed, {} failed, {} rolled back in {} ms.",
+        summary.steps_completed,
+        summary.steps_failed,
+        summary.steps_rolled_back,
+        summary.total_duration_ms
+    );
+    println!("Audit log written to {}", audit_path.display());
+
+    Ok(())
+}
+
 fn list_capabilities() {
-    println!("Available capabilities:");
-    println!("{:-<60}", "");
-    println!("  {:<35} [{:<9}] Risk: Low", "sentinel.fs.read_file", "ReadOnly");
-    println!("    Read the contents of a file from the target system.");
-    println!("  {:<35} [{:<9}] Risk: High", "sentinel.fs.write_file", "Mutating");
-    println!("    Write or overwrite a file on the target system.");
-    println!("  {:<35} [{:<9}] Risk: Low", "sentinel.svc.status", "ReadOnly");
-    println!("    Query the status of a systemd service.");
-    println!("  {:<35} [{:<9}] Risk: Medium", "sentinel.svc.restart", "Mutating");
-    println!("    Restart a systemd service.");
-    println!("  {:<35} [{:<9}] Risk: High", "sentinel.exec.run_command", "Mutating");
-    println!("    Execute an arbitrary shell command.");
+    let executor = Arc::new(RealCommandExecutor);
+    let caps = all_capabilities(executor);
+    println!("Available capabilities ({}):", caps.len());
+    for cap in &caps {
+        let m = cap.manifest();
+        println!(
+            "  {:<30} [{:?}]  Risk: {:?}{}",
+            m.id,
+            m.kind,
+            m.risk_tier,
+            if m.has_inverse { "  [rollback]" } else { "" }
+        );
+        println!("    {}", m.description);
+    }
 }
 
 fn show_policy() {
-    use sentinel_policy::default_policy;
     let _evaluator = default_policy();
     println!("Default Sentinel policy (deny-by-default):");
     println!("{:-<60}", "");

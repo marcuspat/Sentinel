@@ -22,3 +22,7 @@ reqwest = { workspace = true }
 tokio = { workspace = true }
 mockall = { workspace = true }
 wiremock = { workspace = true }
+sentinel-capabilities = { workspace = true }
+sentinel-exec = { workspace = true }
+sentinel-policy = { workspace = true }
+tempfile = { workspace = true }

@@ -134,10 +134,8 @@ fn handle_key(app: &mut App, key: KeyEvent) {
                 app.input_cursor -= 1;
             }
         }
-        KeyCode::Right => {
-            if app.input_cursor < app.goal_input.len() {
-                app.input_cursor += 1;
-            }
+        KeyCode::Right if app.input_cursor < app.goal_input.len() => {
+            app.input_cursor += 1;
         }
 
         _ => {}
