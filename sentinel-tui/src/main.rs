@@ -17,8 +17,9 @@ use sentinel_agent_llm::{
 };
 use sentinel_audit::AuditLog;
 use sentinel_capabilities::all_capabilities;
-use sentinel_core::ApprovalDecision;
+use sentinel_core::{ApprovalDecision, CapabilityResult, ExecutionContext};
 use sentinel_exec::RealCommandExecutor;
+use sentinel_fleet::{execute_on_fleet, FleetConfig};
 use sentinel_policy::{default_policy, RuleCondition};
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -81,6 +82,21 @@ enum Commands {
     VerifyAudit {
         path: std::path::PathBuf,
     },
+    /// Run a capability across multiple hosts in parallel over SSH
+    Fleet {
+        /// Operational goal / label for this fleet run
+        #[arg(help = "Goal or label for this fleet run")]
+        goal: String,
+        /// Comma-separated host specs: [user@]host[:port]
+        #[arg(long, value_delimiter = ',')]
+        hosts: Vec<String>,
+        /// Capability id to run on every host
+        #[arg(long, default_value = "system_metrics")]
+        capability: String,
+        /// JSON arguments object for the capability
+        #[arg(long, default_value = "{}")]
+        args: String,
+    },
     /// Launch the interactive TUI
     Tui {
         /// Target host
@@ -104,6 +120,12 @@ async fn main() -> Result<()> {
         Commands::Capabilities => list_capabilities(),
         Commands::Policy => show_policy(),
         Commands::VerifyAudit { path } => verify_audit(&path)?,
+        Commands::Fleet {
+            goal,
+            hosts,
+            capability,
+            args,
+        } => run_fleet(goal, hosts, capability, args).await?,
         Commands::Run {
             goal,
             host,
@@ -309,6 +331,68 @@ async fn run_agent(
     );
     println!("Audit log written to {}", audit_path.display());
 
+    Ok(())
+}
+
+/// Run a capability across multiple hosts in parallel over SSH and print
+/// per-host results.
+async fn run_fleet(
+    goal: String,
+    hosts: Vec<String>,
+    capability: String,
+    args: String,
+) -> Result<()> {
+    if hosts.is_empty() {
+        return Err(anyhow::anyhow!(
+            "no hosts specified; pass --hosts host1,host2[,...]"
+        ));
+    }
+
+    let parsed_args: std::collections::HashMap<String, serde_json::Value> =
+        serde_json::from_str(&args)
+            .map_err(|e| anyhow::anyhow!("--args must be a JSON object: {e}"))?;
+
+    let config = FleetConfig::from_specs(&hosts);
+    let session_id = Uuid::new_v4();
+    let ctx = ExecutionContext::new(session_id, "fleet");
+
+    println!("Fleet run: {goal}");
+    println!("Capability : {capability}");
+    println!("Hosts ({}) : {}", config.len(), hosts.join(", "));
+    println!();
+
+    let results = execute_on_fleet(&config, &capability, &parsed_args, &ctx).await;
+
+    let mut hostnames: Vec<&String> = results.keys().collect();
+    hostnames.sort();
+
+    let mut ok = 0usize;
+    let mut failed = 0usize;
+    for hostname in hostnames {
+        match &results[hostname] {
+            CapabilityResult::Success { output } => {
+                ok += 1;
+                println!("✔ {hostname}: success");
+                if let Ok(pretty) = serde_json::to_string(output) {
+                    println!("    {pretty}");
+                }
+            }
+            CapabilityResult::Failure { error, .. } => {
+                failed += 1;
+                println!("x {hostname}: FAILED — {error}");
+            }
+            CapabilityResult::DryRun { predicted_effect } => {
+                ok += 1;
+                println!("• {hostname}: dry-run");
+                if let Ok(pretty) = serde_json::to_string(predicted_effect) {
+                    println!("    {pretty}");
+                }
+            }
+        }
+    }
+
+    println!();
+    println!("Fleet summary: {ok} succeeded, {failed} failed across {} host(s).", config.len());
     Ok(())
 }
 
