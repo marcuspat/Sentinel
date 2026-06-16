@@ -177,6 +177,14 @@ impl PolicyEvaluator {
         &self.kill_switch
     }
 
+    /// Return the evaluator's rules, sorted ascending by priority.
+    ///
+    /// Useful for introspection — e.g. rendering the active policy in a CLI or
+    /// TUI — without exposing mutable access to the internal vector.
+    pub fn rules(&self) -> &[PolicyRule] {
+        &self.rules
+    }
+
     // ── Private helpers ───────────────────────────────────────────────────────
 
     fn check_kill_switch(&self, req: &PolicyRequest) -> Option<PolicyDecision> {
@@ -467,6 +475,19 @@ mod tests {
 
         let not_found = evaluator.remove_rule("nonexistent");
         assert!(not_found.is_none());
+    }
+
+    #[test]
+    fn rules_getter_returns_sorted_rules() {
+        let ks = KillSwitch::new();
+        // Pass rules out of priority order; constructor sorts them ascending.
+        let evaluator =
+            PolicyEvaluator::new(vec![allow_all_low_rule(), deny_critical_rule()], ks, vec![]);
+        let rules = evaluator.rules();
+        assert_eq!(rules.len(), 2);
+        // deny-critical has priority 10, allow-low has priority 100.
+        assert_eq!(rules[0].id, "deny-critical");
+        assert_eq!(rules[1].id, "allow-low");
     }
 
     #[test]
