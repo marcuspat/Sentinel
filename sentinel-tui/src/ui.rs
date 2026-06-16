@@ -3,14 +3,14 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
-        Block, Borders, Cell, Gauge, List, ListItem, Paragraph, Row, Table, Tabs,
+        Block, Borders, Cell, Clear, Gauge, List, ListItem, Paragraph, Row, Table, Tabs, Wrap,
     },
     Frame,
 };
 
 use sentinel_core::RiskTier;
 
-use crate::app::{App, LogLevel, Session, StepStatus, Tab};
+use crate::app::{App, LogLevel, PlanStep, Session, StepStatus, Tab};
 
 /// Entry point for rendering the entire TUI.
 pub fn draw(frame: &mut Frame, app: &App) {
@@ -36,6 +36,99 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
 
     render_status_bar(frame, chunks[3], app);
+
+    // A pending approval renders as a blocking modal over everything else.
+    if let Some(step) = app.pending_approval_step() {
+        render_approval_modal(frame, frame.area(), step);
+    }
+}
+
+/// Compute a `Rect` centered within `area`, sized as a percentage of it.
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(area);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(vertical[1])[1]
+}
+
+/// Render the blocking approval modal for a step requiring operator approval.
+fn render_approval_modal(frame: &mut Frame, area: Rect, step: &PlanStep) {
+    let popup = centered_rect(60, 50, area);
+
+    // Clear whatever is underneath so the modal stands alone.
+    frame.render_widget(Clear, popup);
+
+    let args = serde_json::to_string_pretty(&step.args)
+        .unwrap_or_else(|_| step.args.to_string());
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "This step requires your approval before it can run.",
+            Style::default().fg(Color::Yellow),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("Capability : "),
+            Span::styled(
+                step.capability_id.clone(),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![
+            Span::raw("Risk tier  : "),
+            Span::styled(
+                step.risk_tier.to_string(),
+                Style::default()
+                    .fg(risk_color(step.risk_tier))
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![
+            Span::raw("Action     : "),
+            Span::raw(step.description.clone()),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("Arguments:", Style::default().fg(Color::Gray))),
+    ];
+    for arg_line in args.lines() {
+        lines.push(Line::from(Span::styled(
+            format!("  {arg_line}"),
+            Style::default().fg(Color::White),
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Approve?   [y] yes      [n / Esc] abort",
+        Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+    )));
+
+    let modal = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Step Approval Required ")
+                .borders(Borders::ALL)
+                .border_style(
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+        )
+        .wrap(Wrap { trim: false });
+
+    frame.render_widget(modal, popup);
 }
 
 fn render_header(frame: &mut Frame, area: Rect, app: &App) {

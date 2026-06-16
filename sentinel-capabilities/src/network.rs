@@ -246,7 +246,9 @@ impl Capability for NetworkInterfaces {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::sync::Mutex;
     use sentinel_exec::{CommandExecutorTrait, CommandOutput};
+    use uuid::Uuid;
 
     struct DummyExecutor;
     #[async_trait::async_trait]
@@ -264,6 +266,118 @@ mod tests {
 
     fn make_executor() -> Arc<dyn CommandExecutorTrait> {
         Arc::new(DummyExecutor)
+    }
+
+    /// Mock executor that records each invocation and returns canned stdout
+    /// per program (always exit 0). Lets us drive `invoke()` without the OS.
+    struct MockExecutor {
+        calls: Mutex<Vec<(String, Vec<String>)>>,
+    }
+
+    impl MockExecutor {
+        fn new() -> Arc<Self> {
+            Arc::new(Self { calls: Mutex::new(Vec::new()) })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl CommandExecutorTrait for MockExecutor {
+        async fn run(
+            &self,
+            program: &str,
+            args: &[&str],
+            _env: &HashMap<String, String>,
+            _max_output_bytes: usize,
+        ) -> Result<CommandOutput, sentinel_exec::ExecError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((program.to_string(), args.iter().map(|s| s.to_string()).collect()));
+
+            let stdout = match program {
+                // `which <tool>` succeeds → primary tool (ss / ip) is selected.
+                "which" => "/usr/bin/tool\n",
+                "ss" => {
+                    "Netid State  Recv-Q Send-Q Local Address:Port Peer Address:Port\n\
+                     tcp   LISTEN 0      128    0.0.0.0:22         0.0.0.0:*\n\
+                     tcp   ESTAB  0      0      192.168.1.1:22     10.0.0.1:54321\n"
+                }
+                "netstat" => "Proto Recv-Q Send-Q Local Address Foreign Address State\n",
+                "ip" => {
+                    "1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 state UNKNOWN\n    \
+                     inet 127.0.0.1/8 scope host lo\n\
+                     2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 state UP\n    \
+                     inet 192.168.1.10/24 brd 192.168.1.255 scope global eth0\n"
+                }
+                "ifconfig" => "",
+                _ => "",
+            };
+
+            Ok(CommandOutput {
+                exit_code: Some(0),
+                stdout: stdout.to_string(),
+                stderr: String::new(),
+                truncated: false,
+            })
+        }
+    }
+
+    fn ctx() -> ExecutionContext {
+        ExecutionContext::new(Uuid::new_v4(), "localhost")
+    }
+
+    #[tokio::test]
+    async fn network_connections_invoke_parses_ss_output() {
+        let exec = MockExecutor::new();
+        let cap = NetworkConnections::new(Arc::clone(&exec) as Arc<dyn CommandExecutorTrait>);
+
+        let result = cap.invoke(json!({}), &ctx()).await;
+        assert!(result.is_success());
+        if let CapabilityResult::Success { output } = result {
+            assert_eq!(output["tool"], "ss");
+            // Two data lines (header skipped) → two connections.
+            assert_eq!(output["count"], 2);
+            assert_eq!(output["connections"][0]["proto"], "tcp");
+            assert_eq!(output["connections"][0]["state"], "LISTEN");
+        }
+
+        // Verify it actually shelled out to `ss -tuln` (no shell, explicit args).
+        let calls = exec.calls.lock().unwrap();
+        assert!(calls.iter().any(|(p, a)| p == "ss" && a == &["-tuln"]));
+    }
+
+    #[tokio::test]
+    async fn network_connections_invoke_state_filter() {
+        let exec = MockExecutor::new();
+        let cap = NetworkConnections::new(exec as Arc<dyn CommandExecutorTrait>);
+
+        let result = cap.invoke(json!({ "state": "LISTEN" }), &ctx()).await;
+        assert!(result.is_success());
+        if let CapabilityResult::Success { output } = result {
+            // Only the LISTEN line survives the filter.
+            assert_eq!(output["count"], 1);
+            assert_eq!(output["connections"][0]["state"], "LISTEN");
+        }
+    }
+
+    #[tokio::test]
+    async fn network_interfaces_invoke_parses_ip_output() {
+        let exec = MockExecutor::new();
+        let cap = NetworkInterfaces::new(Arc::clone(&exec) as Arc<dyn CommandExecutorTrait>);
+
+        let result = cap.invoke(json!({}), &ctx()).await;
+        assert!(result.is_success());
+        if let CapabilityResult::Success { output } = result {
+            assert_eq!(output["tool"], "ip");
+            let ifaces = output["interfaces"].as_array().unwrap();
+            assert_eq!(ifaces.len(), 2);
+            assert_eq!(ifaces[0]["name"], "lo");
+            assert_eq!(ifaces[1]["name"], "eth0");
+            assert_eq!(ifaces[1]["state"], "UP");
+        }
+
+        let calls = exec.calls.lock().unwrap();
+        assert!(calls.iter().any(|(p, a)| p == "ip" && a == &["addr"]));
     }
 
     #[test]

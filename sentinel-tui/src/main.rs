@@ -17,9 +17,10 @@ use sentinel_agent_llm::{
 };
 use sentinel_audit::AuditLog;
 use sentinel_capabilities::all_capabilities;
-use sentinel_core::ApprovalDecision;
+use sentinel_core::{ApprovalDecision, CapabilityResult, ExecutionContext};
 use sentinel_exec::RealCommandExecutor;
-use sentinel_policy::default_policy;
+use sentinel_fleet::{execute_on_fleet, FleetConfig};
+use sentinel_policy::{default_policy, RuleCondition};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -81,6 +82,21 @@ enum Commands {
     VerifyAudit {
         path: std::path::PathBuf,
     },
+    /// Run a capability across multiple hosts in parallel over SSH
+    Fleet {
+        /// Operational goal / label for this fleet run
+        #[arg(help = "Goal or label for this fleet run")]
+        goal: String,
+        /// Comma-separated host specs: [user@]host[:port]
+        #[arg(long, value_delimiter = ',')]
+        hosts: Vec<String>,
+        /// Capability id to run on every host
+        #[arg(long, default_value = "system_metrics")]
+        capability: String,
+        /// JSON arguments object for the capability
+        #[arg(long, default_value = "{}")]
+        args: String,
+    },
     /// Launch the interactive TUI
     Tui {
         /// Target host
@@ -104,6 +120,12 @@ async fn main() -> Result<()> {
         Commands::Capabilities => list_capabilities(),
         Commands::Policy => show_policy(),
         Commands::VerifyAudit { path } => verify_audit(&path)?,
+        Commands::Fleet {
+            goal,
+            hosts,
+            capability,
+            args,
+        } => run_fleet(goal, hosts, capability, args).await?,
         Commands::Run {
             goal,
             host,
@@ -312,6 +334,68 @@ async fn run_agent(
     Ok(())
 }
 
+/// Run a capability across multiple hosts in parallel over SSH and print
+/// per-host results.
+async fn run_fleet(
+    goal: String,
+    hosts: Vec<String>,
+    capability: String,
+    args: String,
+) -> Result<()> {
+    if hosts.is_empty() {
+        return Err(anyhow::anyhow!(
+            "no hosts specified; pass --hosts host1,host2[,...]"
+        ));
+    }
+
+    let parsed_args: std::collections::HashMap<String, serde_json::Value> =
+        serde_json::from_str(&args)
+            .map_err(|e| anyhow::anyhow!("--args must be a JSON object: {e}"))?;
+
+    let config = FleetConfig::from_specs(&hosts);
+    let session_id = Uuid::new_v4();
+    let ctx = ExecutionContext::new(session_id, "fleet");
+
+    println!("Fleet run: {goal}");
+    println!("Capability : {capability}");
+    println!("Hosts ({}) : {}", config.len(), hosts.join(", "));
+    println!();
+
+    let results = execute_on_fleet(&config, &capability, &parsed_args, &ctx).await;
+
+    let mut hostnames: Vec<&String> = results.keys().collect();
+    hostnames.sort();
+
+    let mut ok = 0usize;
+    let mut failed = 0usize;
+    for hostname in hostnames {
+        match &results[hostname] {
+            CapabilityResult::Success { output } => {
+                ok += 1;
+                println!("✔ {hostname}: success");
+                if let Ok(pretty) = serde_json::to_string(output) {
+                    println!("    {pretty}");
+                }
+            }
+            CapabilityResult::Failure { error, .. } => {
+                failed += 1;
+                println!("x {hostname}: FAILED — {error}");
+            }
+            CapabilityResult::DryRun { predicted_effect } => {
+                ok += 1;
+                println!("• {hostname}: dry-run");
+                if let Ok(pretty) = serde_json::to_string(predicted_effect) {
+                    println!("    {pretty}");
+                }
+            }
+        }
+    }
+
+    println!();
+    println!("Fleet summary: {ok} succeeded, {failed} failed across {} host(s).", config.len());
+    Ok(())
+}
+
 fn list_capabilities() {
     let executor = Arc::new(RealCommandExecutor);
     let caps = all_capabilities(executor);
@@ -330,19 +414,82 @@ fn list_capabilities() {
 }
 
 fn show_policy() {
-    let _evaluator = default_policy();
-    println!("Default Sentinel policy (deny-by-default):");
-    println!("{:-<60}", "");
-    println!("  10  deny-critical          Deny ALL Critical-risk actions");
-    println!("  20  deny-high-mutating     Deny High-risk mutating actions");
-    println!("  50  require-approval-high  High-risk actions require approval");
+    let evaluator = default_policy();
+    let rules = evaluator.rules();
+
     println!(
-        "  100 require-approval-medium Mutating Medium-risk requires approval"
+        "Default Sentinel policy (deny-by-default) — {} rule(s):",
+        rules.len()
     );
-    println!(
-        "  200 allow-read-low-medium   Allow read-only Low/Medium without approval"
-    );
-    println!("  300 allow-low-risk         Allow all Low-risk actions");
+    println!("{:-<78}", "");
+    println!("  {:<5} {:<33} {:<16} Conditions", "Prio", "Rule ID", "Effect");
+    println!("{:-<78}", "");
+
+    for rule in rules {
+        let conditions = if rule.conditions.is_empty() {
+            "<always matches>".to_string()
+        } else {
+            rule.conditions
+                .iter()
+                .map(describe_condition)
+                .collect::<Vec<_>>()
+                .join(" AND ")
+        };
+        let effect = if rule.enabled {
+            format!("{:?}", rule.effect)
+        } else {
+            format!("{:?} (disabled)", rule.effect)
+        };
+        println!(
+            "  {:<5} {:<33} {:<16} {}",
+            rule.priority, rule.id, effect, conditions
+        );
+        println!("        {}", rule.description);
+    }
+
+    println!("{:-<78}", "");
+    println!("Rules are evaluated in ascending priority order; the first match wins.");
+    println!("Any request not matched by an Allow/AuditOnly rule is denied by default.");
+}
+
+/// Render a [`RuleCondition`] as a concise, human-readable predicate string.
+fn describe_condition(cond: &RuleCondition) -> String {
+    match cond {
+        RuleCondition::CapabilityId { matches } => format!("capability_id == \"{matches}\""),
+        RuleCondition::CapabilityIdIn { ids } => {
+            format!("capability_id in [{}]", ids.join(", "))
+        }
+        RuleCondition::RiskTierAtLeast { tier } => format!("risk >= {tier:?}"),
+        RuleCondition::RiskTierExactly { tier } => format!("risk == {tier:?}"),
+        RuleCondition::TargetHost { pattern } => format!("host matches \"{pattern}\""),
+        RuleCondition::ArgValueContains { path, value } => {
+            format!("args.{path} contains \"{value}\"")
+        }
+        RuleCondition::TimeWindow {
+            start_hour,
+            end_hour,
+            days,
+        } => format!("time in [{start_hour:02}:00, {end_hour:02}:00) days={days:?}"),
+        RuleCondition::CapabilityKindIs { kind } => format!("kind == {kind:?}"),
+        RuleCondition::SessionPhase { phase } => format!("phase == \"{phase}\""),
+        RuleCondition::Not { condition } => format!("NOT ({})", describe_condition(condition)),
+        RuleCondition::And { conditions } => format!(
+            "({})",
+            conditions
+                .iter()
+                .map(describe_condition)
+                .collect::<Vec<_>>()
+                .join(" AND ")
+        ),
+        RuleCondition::Or { conditions } => format!(
+            "({})",
+            conditions
+                .iter()
+                .map(describe_condition)
+                .collect::<Vec<_>>()
+                .join(" OR ")
+        ),
+    }
 }
 
 fn verify_audit(path: &std::path::Path) -> Result<()> {

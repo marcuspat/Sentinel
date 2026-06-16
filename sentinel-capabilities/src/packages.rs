@@ -323,7 +323,9 @@ impl Capability for PackageUpgrade {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::sync::Mutex;
     use sentinel_exec::{CommandExecutorTrait, CommandOutput};
+    use uuid::Uuid;
 
     struct DummyExecutor;
     #[async_trait::async_trait]
@@ -341,6 +343,132 @@ mod tests {
 
     fn make_executor() -> Arc<dyn CommandExecutorTrait> {
         Arc::new(DummyExecutor)
+    }
+
+    /// Mock executor: records calls and returns canned stdout (exit 0). `which`
+    /// succeeds for every candidate, so `apt` (first probed) is selected.
+    struct MockExecutor {
+        calls: Mutex<Vec<(String, Vec<String>)>>,
+    }
+
+    impl MockExecutor {
+        fn new() -> Arc<Self> {
+            Arc::new(Self { calls: Mutex::new(Vec::new()) })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl CommandExecutorTrait for MockExecutor {
+        async fn run(
+            &self,
+            program: &str,
+            args: &[&str],
+            _env: &HashMap<String, String>,
+            _max_output_bytes: usize,
+        ) -> Result<CommandOutput, sentinel_exec::ExecError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((program.to_string(), args.iter().map(|s| s.to_string()).collect()));
+
+            let stdout = match program {
+                "which" => "/usr/bin/apt\n",
+                "apt" if args.contains(&"list") => {
+                    "Listing... Done\n\
+                     nginx/stable 1.18.0 amd64 [installed]\n\
+                     openssl/stable 1.1.1 amd64 [installed]\n"
+                }
+                "apt" => "Reading package lists... Done\nUpgrading nginx (1.18.0 -> 1.18.1)\n",
+                _ => "",
+            };
+
+            Ok(CommandOutput {
+                exit_code: Some(0),
+                stdout: stdout.to_string(),
+                stderr: String::new(),
+                truncated: false,
+            })
+        }
+    }
+
+    fn ctx() -> ExecutionContext {
+        ExecutionContext::new(Uuid::new_v4(), "localhost")
+    }
+
+    #[tokio::test]
+    async fn package_list_invoke_uses_apt() {
+        let exec = MockExecutor::new();
+        let cap = PackageList::new(Arc::clone(&exec) as Arc<dyn CommandExecutorTrait>);
+
+        let result = cap.invoke(json!({}), &ctx()).await;
+        assert!(result.is_success());
+        if let CapabilityResult::Success { output } = result {
+            assert_eq!(output["package_manager"], "apt");
+            // Three stdout lines → three "packages" (no header skipping here).
+            assert_eq!(output["count"], 3);
+        }
+
+        let calls = exec.calls.lock().unwrap();
+        assert!(calls.iter().any(|(p, a)| p == "apt" && a == &["list", "--installed"]));
+    }
+
+    #[tokio::test]
+    async fn package_list_invoke_filter() {
+        let exec = MockExecutor::new();
+        let cap = PackageList::new(exec as Arc<dyn CommandExecutorTrait>);
+
+        let result = cap.invoke(json!({ "filter": "nginx" }), &ctx()).await;
+        assert!(result.is_success());
+        if let CapabilityResult::Success { output } = result {
+            // Only the nginx line matches the filter.
+            assert_eq!(output["count"], 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn package_upgrade_all_invoke() {
+        let exec = MockExecutor::new();
+        let cap = PackageUpgrade::new(Arc::clone(&exec) as Arc<dyn CommandExecutorTrait>);
+
+        let result = cap.invoke(json!({ "all": true }), &ctx()).await;
+        assert!(result.is_success());
+        if let CapabilityResult::Success { output } = result {
+            assert_eq!(output["package_manager"], "apt");
+            assert_eq!(output["success"], true);
+        }
+
+        let calls = exec.calls.lock().unwrap();
+        assert!(calls.iter().any(|(p, a)| p == "apt" && a == &["upgrade", "-y"]));
+    }
+
+    #[tokio::test]
+    async fn package_upgrade_specific_invoke() {
+        let exec = MockExecutor::new();
+        let cap = PackageUpgrade::new(Arc::clone(&exec) as Arc<dyn CommandExecutorTrait>);
+
+        let result = cap.invoke(json!({ "packages": ["nginx"] }), &ctx()).await;
+        assert!(result.is_success());
+
+        // No shell — explicit `apt install --only-upgrade -y nginx`.
+        let calls = exec.calls.lock().unwrap();
+        assert!(calls
+            .iter()
+            .any(|(p, a)| p == "apt" && a == &["install", "--only-upgrade", "-y", "nginx"]));
+    }
+
+    #[tokio::test]
+    async fn package_upgrade_inverse_returns_failure() {
+        let cap = PackageUpgrade::new(make_executor());
+        let result = cap.invoke_inverse(json!({ "all": true }), &ctx()).await;
+        // has_inverse is true, but auto-rollback is intentionally unsupported:
+        // it returns a non-recoverable failure with manual guidance.
+        match result {
+            Some(CapabilityResult::Failure { error, recoverable }) => {
+                assert!(!recoverable);
+                assert!(error.contains("rollback") || error.contains("downgrade"));
+            }
+            other => panic!("expected Some(Failure), got {other:?}"),
+        }
     }
 
     #[test]
