@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use uuid::Uuid;
 
-use crate::app::{App, SessionUpdate, StepStatus, Tab};
+use crate::app::{App, ApprovalOutcome, SessionUpdate, StepStatus, Tab};
 
 /// Events that the TUI event loop dispatches.
 #[derive(Debug, Clone)]
@@ -26,11 +26,14 @@ pub async fn handle_events(
     app: &mut App,
     event: AppEvent,
 ) -> Result<(), anyhow::Error> {
+    // Surface any pending approval request from the agent before handling the
+    // event, so a freshly-arrived request blocks input on this same pass.
+    app.poll_approval();
+
     match event {
         AppEvent::Key(key) => handle_key(app, key),
         AppEvent::Tick => {
-            // Periodic tick — nothing to do for now.  Could be used to refresh
-            // external state or animate progress indicators.
+            // Periodic tick — nothing to do beyond the approval poll above.
         }
         AppEvent::SessionUpdate(update) => {
             app.apply_session_update(update);
@@ -47,6 +50,20 @@ pub async fn handle_events(
 
 /// Handle a raw keyboard event.
 fn handle_key(app: &mut App, key: KeyEvent) {
+    // A blocking approval modal owns all input while active: only y/n/Esc act.
+    if app.is_approving() {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                app.submit_approval(ApprovalOutcome::Approve);
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                app.submit_approval(ApprovalOutcome::Abort);
+            }
+            _ => {}
+        }
+        return;
+    }
+
     // Ctrl-C or Ctrl-Q always quits, regardless of tab.
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
@@ -283,6 +300,57 @@ mod tests {
         app.log_scroll = 3;
         handle_key(&mut app, key(KeyCode::Char('k')));
         assert_eq!(app.log_scroll, 2);
+    }
+
+    // ── Interactive approval modal ────────────────────────────────────────────
+
+    fn approving_app() -> (App, tokio::sync::oneshot::Receiver<ApprovalOutcome>) {
+        use crate::app::PlanStep;
+        use sentinel_core::RiskTier;
+        let mut app = App::new();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let step = PlanStep::new(
+            "Restart nginx",
+            "service_restart",
+            serde_json::json!({ "service": "nginx" }),
+            RiskTier::High,
+        );
+        app.begin_approval(step, tx);
+        (app, rx)
+    }
+
+    #[test]
+    fn y_key_approves_during_modal() {
+        let (mut app, mut rx) = approving_app();
+        handle_key(&mut app, key(KeyCode::Char('y')));
+        assert!(!app.is_approving());
+        assert_eq!(rx.try_recv().unwrap(), ApprovalOutcome::Approve);
+    }
+
+    #[test]
+    fn n_key_aborts_during_modal() {
+        let (mut app, mut rx) = approving_app();
+        handle_key(&mut app, key(KeyCode::Char('n')));
+        assert!(!app.is_approving());
+        assert_eq!(rx.try_recv().unwrap(), ApprovalOutcome::Abort);
+    }
+
+    #[test]
+    fn esc_aborts_during_modal() {
+        let (mut app, mut rx) = approving_app();
+        handle_key(&mut app, key(KeyCode::Esc));
+        assert!(!app.is_approving());
+        assert_eq!(rx.try_recv().unwrap(), ApprovalOutcome::Abort);
+    }
+
+    #[test]
+    fn other_key_does_nothing_during_modal() {
+        let (mut app, _rx) = approving_app();
+        handle_key(&mut app, key(KeyCode::Char('x')));
+        // Still blocking on approval; modal not dismissed.
+        assert!(app.is_approving());
+        handle_key(&mut app, key(KeyCode::Tab));
+        assert!(app.is_approving());
     }
 
     // ── Async handle_events ───────────────────────────────────────────────────

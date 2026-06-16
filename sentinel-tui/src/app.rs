@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use sentinel_core::{RiskTier, SessionPhase};
@@ -96,6 +97,40 @@ pub enum ApprovalDecision {
     ApproveAll,
     StepByStep,
     Reject { reason: String },
+}
+
+// ── Interactive per-step approval ─────────────────────────────────────────────
+
+/// The operator's answer to a blocking per-step approval prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalOutcome {
+    /// Approve this step — the agent may proceed.
+    Approve,
+    /// Abort — the agent must not run this step (and should stop the plan).
+    Abort,
+}
+
+/// A request from the agent for interactive approval of a single step.
+///
+/// When the policy engine returns `RequiresApproval`, the agent sends one of
+/// these on the approval channel instead of blocking on stdin.  The TUI
+/// surfaces it as a modal and replies with an [`ApprovalOutcome`] on
+/// `responder`.
+#[derive(Debug)]
+pub struct ApprovalRequest {
+    /// The step awaiting approval (capability, risk, args, description).
+    pub step: PlanStep,
+    /// One-shot channel the TUI uses to send the operator's decision back.
+    pub responder: oneshot::Sender<ApprovalOutcome>,
+}
+
+/// High-level interaction state of the TUI.
+#[derive(Debug)]
+pub enum AppState {
+    /// Normal browsing/editing — tabs and inputs are active.
+    Normal,
+    /// A modal is blocking input, awaiting approval of the contained step.
+    ApprovingPlan(PlanStep),
 }
 
 /// Severity level for TUI log entries.
@@ -317,6 +352,12 @@ pub struct App {
     pub status_message: Option<String>,
     /// Cursor position within the goal input field.
     pub input_cursor: usize,
+    /// Current interaction state — drives modal/blocking input handling.
+    pub state: AppState,
+    /// Channel responder for the in-flight approval modal, if any.
+    approval_responder: Option<oneshot::Sender<ApprovalOutcome>>,
+    /// Channel on which the agent emits approval requests for the TUI to poll.
+    approval_rx: Option<mpsc::Receiver<ApprovalRequest>>,
 }
 
 impl Default for App {
@@ -336,7 +377,90 @@ impl App {
             should_quit: false,
             status_message: None,
             input_cursor: 0,
+            state: AppState::Normal,
+            approval_responder: None,
+            approval_rx: None,
         }
+    }
+
+    // ── Interactive approval ──────────────────────────────────────────────────
+
+    /// Attach the channel on which the agent will send approval requests.
+    pub fn set_approval_channel(&mut self, rx: mpsc::Receiver<ApprovalRequest>) {
+        self.approval_rx = Some(rx);
+    }
+
+    /// Returns `true` when a blocking approval modal is active.
+    pub fn is_approving(&self) -> bool {
+        matches!(self.state, AppState::ApprovingPlan(_))
+    }
+
+    /// The step currently awaiting approval, if any.
+    pub fn pending_approval_step(&self) -> Option<&PlanStep> {
+        match &self.state {
+            AppState::ApprovingPlan(step) => Some(step),
+            AppState::Normal => None,
+        }
+    }
+
+    /// Enter the approval modal for `step`, replying on `responder`.
+    ///
+    /// Used by [`poll_approval`](Self::poll_approval); also exposed for direct
+    /// wiring and tests.
+    pub fn begin_approval(
+        &mut self,
+        step: PlanStep,
+        responder: oneshot::Sender<ApprovalOutcome>,
+    ) {
+        self.status_message = Some(format!(
+            "Approval required for '{}' (risk {:?}). Press y to approve, n/Esc to abort.",
+            step.capability_id, step.risk_tier
+        ));
+        self.state = AppState::ApprovingPlan(step);
+        self.approval_responder = Some(responder);
+    }
+
+    /// Non-blocking check for an incoming approval request.  When one arrives
+    /// and no modal is already active, enter the approval modal state.
+    ///
+    /// Call this on every tick so requests surface promptly.
+    pub fn poll_approval(&mut self) {
+        if self.is_approving() {
+            return;
+        }
+        let Some(rx) = self.approval_rx.as_mut() else {
+            return;
+        };
+        if let Ok(req) = rx.try_recv() {
+            self.begin_approval(req.step, req.responder);
+        }
+    }
+
+    /// Resolve the active approval modal, replying to the agent and returning
+    /// to [`AppState::Normal`].  A no-op if no modal is active.
+    pub fn submit_approval(&mut self, outcome: ApprovalOutcome) {
+        if !self.is_approving() {
+            return;
+        }
+        if let Some(responder) = self.approval_responder.take() {
+            // The agent may have given up waiting; ignore a closed channel.
+            let _ = responder.send(outcome);
+        }
+        if let Some(s) = &mut self.session {
+            match outcome {
+                ApprovalOutcome::Approve => {
+                    s.log(LogLevel::Info, "Step approved by operator.")
+                }
+                ApprovalOutcome::Abort => {
+                    s.log(LogLevel::Warn, "Step aborted by operator.")
+                }
+            }
+        }
+        self.status_message = Some(match outcome {
+            ApprovalOutcome::Approve => "Step approved.".to_string(),
+            ApprovalOutcome::Abort => "Plan aborted by operator.".to_string(),
+        });
+        self.state = AppState::Normal;
     }
 
     // ── Navigation ────────────────────────────────────────────────────────────
@@ -704,5 +828,75 @@ mod tests {
         assert!(pv.steps[0].expanded);
         pv.toggle_expanded();
         assert!(!pv.steps[0].expanded);
+    }
+
+    // ── Interactive approval ──────────────────────────────────────────────────
+
+    fn approval_step() -> PlanStep {
+        PlanStep::new(
+            "Restart nginx",
+            "service_restart",
+            serde_json::json!({ "service": "nginx" }),
+            RiskTier::High,
+        )
+    }
+
+    #[tokio::test]
+    async fn poll_approval_enters_modal_state() {
+        let mut app = App::new();
+        assert!(!app.is_approving());
+
+        let (tx, rx) = mpsc::channel::<ApprovalRequest>(4);
+        app.set_approval_channel(rx);
+
+        // Agent emits an approval request.
+        let (responder, _resp_rx) = oneshot::channel();
+        tx.send(ApprovalRequest {
+            step: approval_step(),
+            responder,
+        })
+        .await
+        .unwrap();
+
+        app.poll_approval();
+
+        assert!(app.is_approving());
+        let step = app.pending_approval_step().expect("step present");
+        assert_eq!(step.capability_id, "service_restart");
+        assert_eq!(step.risk_tier, RiskTier::High);
+    }
+
+    #[tokio::test]
+    async fn submit_approval_approve_sends_outcome_and_resets() {
+        let mut app = App::new();
+        let (responder, resp_rx) = oneshot::channel();
+        app.begin_approval(approval_step(), responder);
+        assert!(app.is_approving());
+
+        app.submit_approval(ApprovalOutcome::Approve);
+
+        assert!(!app.is_approving());
+        assert!(matches!(app.state, AppState::Normal));
+        assert_eq!(resp_rx.await.unwrap(), ApprovalOutcome::Approve);
+    }
+
+    #[tokio::test]
+    async fn submit_approval_abort_sends_outcome() {
+        let mut app = App::new();
+        let (responder, resp_rx) = oneshot::channel();
+        app.begin_approval(approval_step(), responder);
+
+        app.submit_approval(ApprovalOutcome::Abort);
+
+        assert!(!app.is_approving());
+        assert_eq!(resp_rx.await.unwrap(), ApprovalOutcome::Abort);
+    }
+
+    #[test]
+    fn submit_approval_is_noop_when_not_approving() {
+        let mut app = App::new();
+        // Should not panic or change state.
+        app.submit_approval(ApprovalOutcome::Approve);
+        assert!(matches!(app.state, AppState::Normal));
     }
 }
