@@ -1,0 +1,15 @@
+services:
+  sentinel:
+    build: .
+    image: sentinel:latest
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY must be set}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - RUST_LOG=${RUST_LOG:-info}
+    # A PTY is required for the TUI and for the run command's stdin approval prompt.
+    stdin_open: true
+    tty: true
+    # Default: launch the TUI pointed at localhost.
+    # Override at run-time:
+    #   docker compose run sentinel run "check disk usage" --host myserver
+    command: tui --host localhost
