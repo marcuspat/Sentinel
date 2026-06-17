@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use sentinel_core::{RiskTier, SessionPhase};
 
-// ── Local plan / session types ────────────────────────────────────────────────
+// ââ Local plan / session types ââââââââââââââââââââââââââââââââââââââââââââââââ
 // These mirror what the agent-llm crate will eventually expose.  They are
 // defined here so the TUI can compile independently while that crate is a
 // placeholder.
@@ -99,14 +99,14 @@ pub enum ApprovalDecision {
     Reject { reason: String },
 }
 
-// ── Interactive per-step approval ─────────────────────────────────────────────
+// ââ Interactive per-step approval âââââââââââââââââââââââââââââââââââââââââââââ
 
 /// The operator's answer to a blocking per-step approval prompt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalOutcome {
-    /// Approve this step — the agent may proceed.
+    /// Approve this step â the agent may proceed.
     Approve,
-    /// Abort — the agent must not run this step (and should stop the plan).
+    /// Abort â the agent must not run this step (and should stop the plan).
     Abort,
 }
 
@@ -127,7 +127,7 @@ pub struct ApprovalRequest {
 /// High-level interaction state of the TUI.
 #[derive(Debug)]
 pub enum AppState {
-    /// Normal browsing/editing — tabs and inputs are active.
+    /// Normal browsing/editing â tabs and inputs are active.
     Normal,
     /// A modal is blocking input, awaiting approval of the contained step.
     ApprovingPlan(PlanStep),
@@ -197,7 +197,7 @@ impl Session {
     }
 }
 
-// ── SessionUpdate ─────────────────────────────────────────────────────────────
+// ââ SessionUpdate âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 /// An update pushed from the background agent task into the TUI event loop.
 #[derive(Debug, Clone)]
@@ -213,7 +213,7 @@ pub enum SessionUpdate {
     Error(String),
 }
 
-// ── Plan view ─────────────────────────────────────────────────────────────────
+// ââ Plan view âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 /// Per-step display state in the Plan tab.
 #[derive(Debug, Clone)]
@@ -285,7 +285,7 @@ impl PlanView {
     }
 }
 
-// ── Tab enum ──────────────────────────────────────────────────────────────────
+// ââ Tab enum ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 /// Top-level navigation tabs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -332,7 +332,7 @@ impl Tab {
     }
 }
 
-// ── App ───────────────────────────────────────────────────────────────────────
+// ââ App âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 /// Top-level TUI application state.
 pub struct App {
@@ -352,12 +352,27 @@ pub struct App {
     pub status_message: Option<String>,
     /// Cursor position within the goal input field.
     pub input_cursor: usize,
-    /// Current interaction state — drives modal/blocking input handling.
+    /// Current interaction state â drives modal/blocking input handling.
     pub state: AppState,
+
+    // ââ New fields for live agent integration âââââââââââââââââââââââââââââââââ
+
+    /// Goal that was just submitted; `run_app()` drains this each tick to
+    /// spawn the background agent task.
+    pub pending_goal: Option<String>,
+    /// Target host passed to the agent for capability execution.
+    pub host: String,
+    /// If `true`, sessions run in plan-only (dry-run) mode.
+    pub dry_run: bool,
+
+    // ââ Private channels ââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+
     /// Channel responder for the in-flight approval modal, if any.
     approval_responder: Option<oneshot::Sender<ApprovalOutcome>>,
     /// Channel on which the agent emits approval requests for the TUI to poll.
     approval_rx: Option<mpsc::Receiver<ApprovalRequest>>,
+    /// Channel on which the background agent emits [`SessionUpdate`]s.
+    session_update_rx: Option<mpsc::Receiver<SessionUpdate>>,
 }
 
 impl Default for App {
@@ -378,12 +393,44 @@ impl App {
             status_message: None,
             input_cursor: 0,
             state: AppState::Normal,
+            // Live agent integration
+            pending_goal: None,
+            host: "localhost".to_string(),
+            dry_run: false,
+            // Private channels
             approval_responder: None,
             approval_rx: None,
+            session_update_rx: None,
         }
     }
 
-    // ── Interactive approval ──────────────────────────────────────────────────
+    // ââ Session update channel ââââââââââââââââââââââââââââââââââââââââââââââââ
+
+    /// Attach the channel on which the background agent emits [`SessionUpdate`]s.
+    pub fn set_session_update_channel(&mut self, rx: mpsc::Receiver<SessionUpdate>) {
+        self.session_update_rx = Some(rx);
+    }
+
+    /// Drain all pending [`SessionUpdate`]s from the background agent.
+    ///
+    /// Call this on every tick before rendering so the UI reflects the latest
+    /// agent state.
+    pub fn poll_session_updates(&mut self) {
+        let Some(rx) = self.session_update_rx.as_mut() else {
+            return;
+        };
+        // Collect updates to avoid borrowing `self` while calling
+        // `apply_session_update` (which needs `&mut self`).
+        let mut updates = Vec::new();
+        while let Ok(update) = rx.try_recv() {
+            updates.push(update);
+        }
+        for update in updates {
+            self.apply_session_update(update);
+        }
+    }
+
+    // ââ Interactive approval ââââââââââââââââââââââââââââââââââââââââââââââââââ
 
     /// Attach the channel on which the agent will send approval requests.
     pub fn set_approval_channel(&mut self, rx: mpsc::Receiver<ApprovalRequest>) {
@@ -463,7 +510,7 @@ impl App {
         self.state = AppState::Normal;
     }
 
-    // ── Navigation ────────────────────────────────────────────────────────────
+    // ââ Navigation ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
     pub fn next_tab(&mut self) {
         self.current_tab = self.current_tab.next();
@@ -473,7 +520,7 @@ impl App {
         self.current_tab = self.current_tab.prev();
     }
 
-    // ── Log scrolling ─────────────────────────────────────────────────────────
+    // ââ Log scrolling âââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
     pub fn scroll_log_down(&mut self) {
         self.log_scroll = self.log_scroll.saturating_add(1);
@@ -483,7 +530,7 @@ impl App {
         self.log_scroll = self.log_scroll.saturating_sub(1);
     }
 
-    // ── Plan approval ─────────────────────────────────────────────────────────
+    // ââ Plan approval âââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
     /// Approve every step in the current plan at once.
     pub fn approve_all(&mut self) {
@@ -514,7 +561,7 @@ impl App {
         self.status_message = Some(format!("Plan rejected: {}", reason));
     }
 
-    // ── Goal / session helpers ────────────────────────────────────────────────
+    // ââ Goal / session helpers ââââââââââââââââââââââââââââââââââââââââââââââââ
 
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.status_message = Some(msg.into());
@@ -524,18 +571,23 @@ impl App {
         self.status_message = None;
     }
 
-    /// Start a new session with `goal_input`.
+    /// Start a new session from `goal_input`.
+    ///
+    /// Sets [`pending_goal`](Self::pending_goal) so that the `run_app()` event
+    /// loop can pick it up on the next tick and spawn the background agent task.
     pub fn start_session(&mut self, host: String, dry_run: bool) {
         let goal = self.goal_input.clone();
         if goal.is_empty() {
             self.status_message = Some("Please enter a goal first.".into());
             return;
         }
+        // Signal run_app() to spawn the agent task on the next tick.
+        self.pending_goal = Some(goal.clone());
         let mut session = Session::new(goal.clone(), host, dry_run);
-        session.log(LogLevel::Info, format!("Session started — goal: {}", goal));
+        session.log(LogLevel::Info, format!("Session started â goal: {}", goal));
         self.session = Some(session);
         self.current_tab = Tab::Investigation;
-        self.status_message = Some("Session started.".into());
+        self.status_message = Some("Session started. Connecting to agentâ¦".into());
     }
 
     /// Apply a `SessionUpdate` received from the background agent.
@@ -554,7 +606,7 @@ impl App {
             SessionUpdate::PlanProposed(plan) => {
                 self.plan_view.load_plan(&plan);
                 if let Some(s) = &mut self.session {
-                    s.log(LogLevel::Info, "Plan proposed — review required.");
+                    s.log(LogLevel::Info, "Plan proposed â review required.");
                     s.current_plan = Some(plan);
                 }
                 self.current_tab = Tab::Plan;
@@ -563,7 +615,7 @@ impl App {
             }
             SessionUpdate::PlanApproved => {
                 if let Some(s) = &mut self.session {
-                    s.log(LogLevel::Info, "Plan approved — beginning execution.");
+                    s.log(LogLevel::Info, "Plan approved â beginning execution.");
                 }
                 self.current_tab = Tab::Execution;
             }
@@ -620,7 +672,7 @@ impl App {
         }
     }
 
-    // ── Plan view delegation ──────────────────────────────────────────────────
+    // ââ Plan view delegation ââââââââââââââââââââââââââââââââââââââââââââââââââ
 
     pub fn plan_scroll_down(&mut self) {
         self.plan_view.move_down();
@@ -631,12 +683,12 @@ impl App {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // ── Tab navigation ────────────────────────────────────────────────────────
+    // ââ Tab navigation ââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
     #[test]
     fn new_app_starts_on_goal_tab() {
@@ -644,6 +696,14 @@ mod tests {
         assert_eq!(app.current_tab, Tab::Goal);
         assert!(!app.should_quit);
         assert!(app.goal_input.is_empty());
+    }
+
+    #[test]
+    fn new_app_has_default_host_and_no_pending_goal() {
+        let app = App::new();
+        assert_eq!(app.host, "localhost");
+        assert!(!app.dry_run);
+        assert!(app.pending_goal.is_none());
     }
 
     #[test]
@@ -682,7 +742,7 @@ mod tests {
         assert_eq!(titles.len(), unique.len());
     }
 
-    // ── Log scroll ────────────────────────────────────────────────────────────
+    // ââ Log scroll ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
     #[test]
     fn scroll_down_and_up() {
@@ -700,7 +760,7 @@ mod tests {
         assert_eq!(app.log_scroll, 0);
     }
 
-    // ── Plan approval ─────────────────────────────────────────────────────────
+    // ââ Plan approval âââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
     fn make_plan() -> Plan {
         Plan::new(
@@ -752,7 +812,7 @@ mod tests {
         ));
     }
 
-    // ── Session ───────────────────────────────────────────────────────────────
+    // ââ Session âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
     #[test]
     fn start_session_without_goal_shows_message() {
@@ -760,10 +820,11 @@ mod tests {
         app.start_session("localhost".into(), false);
         assert!(app.session.is_none());
         assert!(app.status_message.is_some());
+        assert!(app.pending_goal.is_none());
     }
 
     #[test]
-    fn start_session_with_goal_creates_session() {
+    fn start_session_with_goal_creates_session_and_sets_pending_goal() {
         let mut app = App::new();
         app.goal_input = "fix disk full".into();
         app.start_session("web01".into(), false);
@@ -773,6 +834,8 @@ mod tests {
         assert_eq!(s.host, "web01");
         assert!(!s.dry_run);
         assert_eq!(app.current_tab, Tab::Investigation);
+        // pending_goal must be set so run_app() spawns the agent task.
+        assert_eq!(app.pending_goal.as_deref(), Some("fix disk full"));
     }
 
     #[test]
@@ -796,7 +859,24 @@ mod tests {
         );
     }
 
-    // ── Status message ────────────────────────────────────────────────────────
+    // ââ poll_session_updates ââââââââââââââââââââââââââââââââââââââââââââââââââ
+
+    #[tokio::test]
+    async fn poll_session_updates_applies_updates() {
+        let mut app = App::new();
+        app.session = Some(Session::new("goal", "h", false));
+
+        let (tx, rx) = mpsc::channel::<SessionUpdate>(16);
+        app.set_session_update_channel(rx);
+
+        tx.send(SessionUpdate::SessionCompleted).await.unwrap();
+
+        app.poll_session_updates();
+
+        assert_eq!(app.current_tab, Tab::Audit);
+    }
+
+    // ââ Status message ââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
     #[test]
     fn set_and_clear_status() {
@@ -807,7 +887,7 @@ mod tests {
         assert!(app.status_message.is_none());
     }
 
-    // ── PlanView ──────────────────────────────────────────────────────────────
+    // ââ PlanView ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
     #[test]
     fn plan_view_move_down_clamps_at_end() {
@@ -830,7 +910,7 @@ mod tests {
         assert!(!pv.steps[0].expanded);
     }
 
-    // ── Interactive approval ──────────────────────────────────────────────────
+    // ââ Interactive approval ââââââââââââââââââââââââââââââââââââââââââââââââââ
 
     fn approval_step() -> PlanStep {
         PlanStep::new(
