@@ -10,6 +10,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::prelude::*;
+use tokio::sync::{mpsc, Mutex};
 use tracing_subscriber::{fmt, EnvFilter};
 
 use sentinel_agent_llm::{
@@ -21,10 +22,10 @@ use sentinel_core::{ApprovalDecision, CapabilityResult, ExecutionContext};
 use sentinel_exec::RealCommandExecutor;
 use sentinel_fleet::{execute_on_fleet, FleetConfig};
 use sentinel_policy::{default_policy, RuleCondition};
-use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use sentinel_tui::{
+    agent_bridge::{run_agent_session, AgentConfig},
     app::App,
     event_handler::{handle_events, AppEvent},
     ui,
@@ -49,7 +50,7 @@ struct Cli {
     backend: String,
 
     /// Model identifier
-    #[arg(long, default_value = "claude-opus-4-7", global = true)]
+    #[arg(long, default_value = "claude-opus-4-8", global = true)]
     model: String,
 
     /// Log level (trace, debug, info, warn, error)
@@ -102,6 +103,9 @@ enum Commands {
         /// Target host
         #[arg(long, default_value = "localhost")]
         host: String,
+        /// Run in dry-run mode (plan only, no execution)
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -115,8 +119,19 @@ async fn main() -> Result<()> {
 
     match cli.command.unwrap_or(Commands::Tui {
         host: "localhost".into(),
+        dry_run: false,
     }) {
-        Commands::Tui { host } => run_tui(host).await?,
+        Commands::Tui { host, dry_run } => {
+            run_tui(
+                host,
+                dry_run,
+                cli.backend.clone(),
+                cli.anthropic_api_key.clone(),
+                cli.openai_api_key.clone(),
+                cli.model.clone(),
+            )
+            .await?
+        }
         Commands::Capabilities => list_capabilities(),
         Commands::Policy => show_policy(),
         Commands::VerifyAudit { path } => verify_audit(&path)?,
@@ -149,9 +164,16 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-// ── TUI entry point ───────────────────────────────────────────────────────────
+// ââ TUI entry point âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
-async fn run_tui(host: String) -> Result<()> {
+async fn run_tui(
+    host: String,
+    dry_run: bool,
+    backend_name: String,
+    anthropic_api_key: Option<String>,
+    openai_api_key: Option<String>,
+    model: String,
+) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -159,12 +181,21 @@ async fn run_tui(host: String) -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new();
+    app.host = host.clone();
+    app.dry_run = dry_run;
     app.set_status(format!(
-        "Welcome to Sentinel! Target host: {}. Enter a goal and press Enter.",
-        host
+        "Welcome to Sentinel TUI!  Host: {host}.  Enter a goal and press Enter.",
     ));
 
-    let result = run_app(&mut terminal, &mut app).await;
+    let result = run_app(
+        &mut terminal,
+        &mut app,
+        backend_name,
+        anthropic_api_key,
+        openai_api_key,
+        model,
+    )
+    .await;
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -173,13 +204,51 @@ async fn run_tui(host: String) -> Result<()> {
     result
 }
 
+/// Main TUI event loop.
+///
+/// On every tick it:
+/// 1. Drains any [`SessionUpdate`]s from the running agent.
+/// 2. Polls for pending approval requests.
+/// 3. Spawns an agent task if the operator just submitted a new goal.
+/// 4. Re-renders the terminal.
+/// 5. Handles keyboard input.
 async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
+    backend_name: String,
+    anthropic_api_key: Option<String>,
+    openai_api_key: Option<String>,
+    model: String,
 ) -> Result<()> {
     loop {
+        // ââ Drain live agent updates ââââââââââââââââââââââââââââââââââââââ
+        app.poll_session_updates();
+        app.poll_approval();
+
+        // ââ Spawn agent task when a new goal arrives ââââââââââââââââââââââ
+        if let Some(goal) = app.pending_goal.take() {
+            let (update_tx, update_rx) = mpsc::channel(128);
+            let (approval_tx, approval_rx) = mpsc::channel(4);
+            app.set_session_update_channel(update_rx);
+            app.set_approval_channel(approval_rx);
+
+            let config = AgentConfig {
+                goal,
+                host: app.host.clone(),
+                dry_run: app.dry_run,
+                backend_name: backend_name.clone(),
+                anthropic_api_key: anthropic_api_key.clone(),
+                openai_api_key: openai_api_key.clone(),
+                model: model.clone(),
+            };
+
+            tokio::spawn(run_agent_session(config, update_tx, approval_tx));
+        }
+
+        // ââ Render ââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
         terminal.draw(|f| ui::draw(f, app))?;
 
+        // ââ Input âââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
                 handle_events(app, AppEvent::Key(key)).await?;
@@ -195,10 +264,10 @@ async fn run_app(
     Ok(())
 }
 
-// ── Subcommand handlers ───────────────────────────────────────────────────────
+// ââ Subcommand handlers âââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
-/// Wire the full agent stack — LLM backend, executor, capabilities, registry,
-/// policy, audit log — and drive an investigate → plan → approve → act session.
+/// Wire the full agent stack â LLM backend, executor, capabilities, registry,
+/// policy, audit log â and drive an investigate â plan â approve â act session.
 #[allow(clippy::too_many_arguments)]
 async fn run_agent(
     goal: String,
@@ -266,12 +335,12 @@ async fn run_agent(
     println!();
 
     // Investigate.
-    println!("── Investigating ──");
+    println!("ââ Investigating ââ");
     let observations = agent.investigate(session_id, &goal, &host).await?;
     println!("Collected {} observation(s).", observations.len());
 
     // Plan.
-    println!("\n── Planning ──");
+    println!("\nââ Planning ââ");
     let mut plan = agent.plan(session_id, &goal, &observations).await?;
     println!("Rationale    : {}", plan.rationale);
     println!("Overall risk : {:?}", plan.overall_risk);
@@ -294,7 +363,7 @@ async fn run_agent(
 
     // Approve.
     let approval = if auto_approve {
-        println!("\nAuto-approve enabled — executing plan.");
+        println!("\nAuto-approve enabled â executing plan.");
         ApprovalDecision::FullApproval
     } else {
         use std::io::Write as _;
@@ -318,7 +387,7 @@ async fn run_agent(
     }
 
     // Act.
-    println!("\n── Executing ──");
+    println!("\nââ Executing ââ");
     let summary = agent
         .execute_plan(session_id, &host, &mut plan, approval)
         .await?;
@@ -372,18 +441,18 @@ async fn run_fleet(
         match &results[hostname] {
             CapabilityResult::Success { output } => {
                 ok += 1;
-                println!("✔ {hostname}: success");
+                println!("â {hostname}: success");
                 if let Ok(pretty) = serde_json::to_string(output) {
                     println!("    {pretty}");
                 }
             }
             CapabilityResult::Failure { error, .. } => {
                 failed += 1;
-                println!("x {hostname}: FAILED — {error}");
+                println!("x {hostname}: FAILED â {error}");
             }
             CapabilityResult::DryRun { predicted_effect } => {
                 ok += 1;
-                println!("• {hostname}: dry-run");
+                println!("â¢ {hostname}: dry-run");
                 if let Ok(pretty) = serde_json::to_string(predicted_effect) {
                     println!("    {pretty}");
                 }
@@ -418,7 +487,7 @@ fn show_policy() {
     let rules = evaluator.rules();
 
     println!(
-        "Default Sentinel policy (deny-by-default) — {} rule(s):",
+        "Default Sentinel policy (deny-by-default) â {} rule(s):",
         rules.len()
     );
     println!("{:-<78}", "");
@@ -501,12 +570,12 @@ fn verify_audit(path: &std::path::Path) -> Result<()> {
 
     if result.valid {
         println!(
-            "Audit log VALID — {} event(s) verified.",
+            "Audit log VALID â {} event(s) verified.",
             result.events_checked
         );
     } else {
         eprintln!(
-            "Audit log INVALID — chain broken at sequence {}.",
+            "Audit log INVALID â chain broken at sequence {}.",
             result.first_broken_at.unwrap_or(0)
         );
         if let Some(err) = &result.error {
