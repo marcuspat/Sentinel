@@ -1,5 +1,11 @@
 # Sentinel
 
+[![Crates.io](https://img.shields.io/crates/v/sentinel-agent.svg)](https://crates.io/crates/sentinel-agent)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Build](https://github.com/marcuspat/Sentinel/actions/workflows/ci.yml/badge.svg)](https://github.com/marcuspat/Sentinel/actions)
+
+> ⭐ If Sentinel gives your AI agents a safety net, [a star helps others find it](https://github.com/marcuspat/Sentinel).
+
 Sentinel is a safe, auditable agentic system administration tool written in Rust.
 It drives an **Investigate → Plan → Approve → Act** workflow: the LLM gathers
 read-only observations, proposes a structured plan, waits for explicit operator
@@ -15,6 +21,10 @@ hash-chained audit log.
 - **Pluggable LLM backends** — Anthropic Claude, OpenAI, Ollama
 - **Fleet mode** — mutual TLS (rcgen + rustls 0.23), staged rollouts
 - **Interactive TUI** — ratatui 0.30, full keyboard navigation
+
+## Demo
+
+> 📹 **Demo GIF coming soon.** Capture with [`vhs`](https://github.com/charmbracelet/vhs) or `asciinema` + [`agg`](https://github.com/asciinema/agg): run `sentinel run "Ensure nginx is running"` to show the Investigate → Plan → Approve → Act loop in the TUI.
 
 ## Quick Start
 
@@ -95,6 +105,15 @@ sentinel-tui           — ratatui TUI: 5 tabs, approval workflow, clap CLI
 
 See [docs/adr/](docs/adr/) for full Architecture Decision Records and
 [docs/ddd/](docs/ddd/) for Domain-Driven Design documentation.
+
+## Ecosystem
+
+| Repo | What it does |
+|------|-------------|
+| [**codescope**](https://github.com/adventurewave-labs/codescope) | Rust code-intelligence engine for AI agents — no cloud, no DB |
+| [**spacelift-intent**](https://github.com/marcuspat/spacelift-intent) | Natural language → cloud infra via Terraform providers, no HCL |
+| [**secret-scan**](https://github.com/adventurewave-labs/secret-scan) | Rust secret scanner — 51k files/sec, 99% accuracy |
+| [**turbo-flow**](https://github.com/adventurewave-labs/turbo-flow) | Agentic dev environment — 600+ AI subagents, SPARC methodology |
 
 ## License
 
