@@ -22,10 +22,6 @@ hash-chained audit log.
 - **Fleet mode** — mutual TLS (rcgen + rustls 0.23), staged rollouts
 - **Interactive TUI** — ratatui 0.30, full keyboard navigation
 
-## Demo
-
-> 📹 **Demo GIF coming soon.** Capture with [`vhs`](https://github.com/charmbracelet/vhs) or `asciinema` + [`agg`](https://github.com/asciinema/agg): run `sentinel run "Ensure nginx is running"` to show the Investigate → Plan → Approve → Act loop in the TUI.
-
 ## Quick Start
 
 ```bash
