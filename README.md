@@ -12,6 +12,12 @@ read-only observations, proposes a structured plan, waits for explicit operator
 approval, then executes under a strict deny-by-default policy engine with a
 hash-chained audit log.
 
+## 🎬 Demo
+
+![sentinel listing capabilities and the deny-by-default policy](demo.gif)
+
+*The capability catalog and the deny-by-default policy engine — no API key needed for either. Recorded from the actual binary with [asciinema](https://asciinema.org) + [agg](https://github.com/asciinema/agg).*
+
 ## Features
 
 - **Deny-by-default policy engine** — kill switch, resource guards, risk-tiered rules
