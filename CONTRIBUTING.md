@@ -14,7 +14,8 @@ explicit security review in the PR description — see below.
 
 Requirements:
 
-- Rust **1.75** or newer (stable)
+- Rust **1.86** or newer (stable) — set as `rust-version` in the workspace manifest;
+  `ratatui 0.30` and `clap 4.6` are what put the floor there
 - `cargo clippy`, `cargo fmt` (`rustup component add clippy rustfmt`)
 - `cargo audit` (`cargo install cargo-audit`) for dependency checks
 - Docker, only if you are changing the image

@@ -1,6 +1,5 @@
 # Sentinel
 
-[![Crates.io](https://img.shields.io/crates/v/sentinel-agent.svg)](https://crates.io/crates/sentinel-agent)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Build](https://github.com/marcuspat/Sentinel/actions/workflows/ci.yml/badge.svg)](https://github.com/marcuspat/Sentinel/actions)
 
@@ -50,7 +49,7 @@ sentinel --backend ollama --model llama3 run "Check CPU load"
 ## Build
 
 ```bash
-# Requires Rust 1.75+
+# Requires Rust 1.86+ (ratatui 0.30 and clap 4.6 set the floor)
 cargo build --release
 
 # Run all tests
