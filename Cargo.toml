@@ -14,7 +14,7 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "Apache-2.0"
+license = "MIT"
 repository = "https://github.com/marcuspat/Sentinel"
 authors = ["Sentinel Contributors"]
 
@@ -79,14 +79,14 @@ tempfile = "3.9"
 wiremock = "0.6"
 
 # Workspace crates
-sentinel-core = { path = "sentinel-core" }
-sentinel-exec = { path = "sentinel-exec" }
-sentinel-policy = { path = "sentinel-policy" }
-sentinel-capabilities = { path = "sentinel-capabilities" }
-sentinel-agent-llm = { path = "sentinel-agent-llm" }
-sentinel-audit = { path = "sentinel-audit" }
-sentinel-tui = { path = "sentinel-tui" }
-sentinel-fleet = { path = "sentinel-fleet" }
+sentinel-core = { path = "sentinel-core", version = "0.1.0" }
+sentinel-exec = { path = "sentinel-exec", version = "0.1.0" }
+sentinel-policy = { path = "sentinel-policy", version = "0.1.0" }
+sentinel-capabilities = { path = "sentinel-capabilities", version = "0.1.0" }
+sentinel-agent-llm = { path = "sentinel-agent-llm", version = "0.1.0" }
+sentinel-audit = { path = "sentinel-audit", version = "0.1.0" }
+sentinel-tui = { path = "sentinel-tui", version = "0.1.0" }
+sentinel-fleet = { path = "sentinel-fleet", version = "0.1.0" }
 
 [profile.release]
 opt-level = 3

@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- `CONTRIBUTING.md` covering development setup, workspace layout and bounded
+  contexts, code style, testing expectations, ADR process, and the
+  security-sensitive areas that get extra review
+- Tag-driven release automation: verification (fmt, clippy, tests, `cargo audit`),
+  four-target binary builds (`x86_64-unknown-linux-gnu`,
+  `x86_64-unknown-linux-musl`, `aarch64-apple-darwin`, `x86_64-apple-darwin`)
+  with SHA-256 sums, GitHub Release creation from the CHANGELOG section, and an
+  opt-in crates.io publish that walks the workspace in dependency order
+
+### Changed
+- License declaration reconciled to **MIT**, matching `LICENSE` and the README
+  badge — `workspace.package.license` previously declared Apache-2.0
+- Workspace-internal dependencies now carry an explicit `version` alongside
+  `path`; without it `cargo publish` rejects every crate in the workspace
+
+### Fixed
+- `cargo clippy --workspace --all-targets -- -D warnings` — the exact command the
+  CI lint step runs — failed on current stable with eight `collapsible_match`
+  errors in `sentinel-tui`. The TUI key handler now uses match guards. Behaviour
+  is unchanged: `a`, `s` and `r` keep being swallowed off the Plan tab via an
+  explicit no-op arm rather than falling through to the Goal-tab text input
+
 ## [0.1.0] - 2026-05-26
 
 ### Added

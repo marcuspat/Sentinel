@@ -1,0 +1,204 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re-)release, e.g. v0.1.0"
+        required: true
+      publish_crates:
+        description: "Publish to crates.io (requires CARGO_REGISTRY_TOKEN). Leave false for a dry run."
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace
+
+      - name: cargo audit
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  binaries:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            musl: true
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install musl tooling
+        if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin sentinel
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/sentinel" "dist/sentinel-${{ matrix.target }}"
+          cd dist
+          shasum -a 256 "sentinel-${{ matrix.target }}" > "sentinel-${{ matrix.target }}.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentinel-${{ matrix.target }}
+          path: dist/
+
+  release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    needs: binaries
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          # Pull the section for this version out of CHANGELOG.md.
+          awk -v ver="$VERSION" '
+            $0 ~ "^## \\[" ver "\\]" { found=1; next }
+            found && /^## \[/        { exit }
+            found                    { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "No CHANGELOG.md section for $VERSION; falling back to generated notes." >&2
+            echo "generated=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "generated=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: Sentinel ${{ github.event.inputs.tag || github.ref_name }}
+          body_path: ${{ steps.notes.outputs.generated == 'false' && 'release-notes.md' || '' }}
+          generate_release_notes: ${{ steps.notes.outputs.generated == 'true' }}
+          prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}
+          files: artifacts/*
+
+  publish:
+    name: crates.io
+    runs-on: ubuntu-latest
+    needs: release
+    # Publishing is opt-in and manual only. A tag push builds binaries and cuts
+    # the GitHub Release; re-run this workflow via workflow_dispatch to dry-run
+    # or (with publish_crates=true) actually publish to crates.io.
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Publish workspace crates in dependency order
+        shell: bash
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          DO_PUBLISH: ${{ github.event.inputs.publish_crates == 'true' }}
+        run: |
+          set -euo pipefail
+          # Order matters: each crate must already be on the registry before a
+          # dependent crate is published.
+          CRATES=(
+            sentinel-core
+            sentinel-exec
+            sentinel-policy
+            sentinel-capabilities
+            sentinel-audit
+            sentinel-agent-llm
+            sentinel-fleet
+            sentinel-tui
+          )
+          if [ "$DO_PUBLISH" != "true" ]; then
+            echo "::notice::Dry run — re-run this workflow with publish_crates=true to publish."
+            for c in "${CRATES[@]}"; do
+              cargo publish --dry-run --locked -p "$c" --allow-dirty
+            done
+            exit 0
+          fi
+          if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
+            echo "::error::CARGO_REGISTRY_TOKEN is not set."
+            exit 1
+          fi
+          for c in "${CRATES[@]}"; do
+            echo "::group::publish $c"
+            cargo publish --locked -p "$c"
+            # Give the index time to propagate before the next crate resolves it.
+            sleep 45
+            echo "::endgroup::"
+          done

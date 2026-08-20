@@ -119,4 +119,4 @@ See [docs/adr/](docs/adr/) for full Architecture Decision Records and
 
 ## License
 
-Apache-2.0
+MIT — see [LICENSE](LICENSE).
