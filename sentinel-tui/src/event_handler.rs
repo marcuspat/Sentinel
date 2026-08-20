@@ -106,51 +106,41 @@ fn handle_key(app: &mut App, key: KeyEvent) {
         }
 
         // ââ Plan approval actions âââââââââââââââââââââââââââââââââââââââââ
-        KeyCode::Char('a') => {
-            if app.current_tab == Tab::Plan {
-                app.approve_all();
-            }
+        KeyCode::Char('a') if app.current_tab == Tab::Plan => {
+            app.approve_all();
         }
-        KeyCode::Char('s') => {
+        KeyCode::Char('s') if app.current_tab == Tab::Plan => {
             // Step-by-step approval: approve the currently selected step.
-            if app.current_tab == Tab::Plan {
-                let idx = app.plan_view.selected_index;
-                app.approve_step(idx);
-            }
+            let idx = app.plan_view.selected_index;
+            app.approve_step(idx);
         }
-        KeyCode::Char('r') => {
-            if app.current_tab == Tab::Plan {
-                app.reject_plan("Rejected by operator.".into());
-            }
+        KeyCode::Char('r') if app.current_tab == Tab::Plan => {
+            app.reject_plan("Rejected by operator.".into());
         }
+        // Off the Plan tab these three keys are swallowed rather than falling
+        // through to the Goal-tab text input below. Removing these arms would
+        // change behaviour: 'a', 's' and 'r' would start inserting characters.
+        KeyCode::Char('a') | KeyCode::Char('s') | KeyCode::Char('r') => {}
 
         // ââ Goal input (only on Goal tab) âââââââââââââââââââââââââââââââââ
-        KeyCode::Enter => {
-            if app.current_tab == Tab::Goal {
-                // Use the host and dry_run stored in app state (set from CLI args
-                // in run_tui) rather than hardcoded defaults.
-                let host = app.host.clone();
-                let dry_run = app.dry_run;
-                app.start_session(host, dry_run);
-            }
+        KeyCode::Enter if app.current_tab == Tab::Goal => {
+            // Use the host and dry_run stored in app state (set from CLI args
+            // in run_tui) rather than hardcoded defaults.
+            let host = app.host.clone();
+            let dry_run = app.dry_run;
+            app.start_session(host, dry_run);
         }
-        KeyCode::Char(c) => {
-            if app.current_tab == Tab::Goal {
-                // Insert character at cursor position.
-                app.goal_input.insert(app.input_cursor, c);
-                app.input_cursor += 1;
-            }
+        KeyCode::Char(c) if app.current_tab == Tab::Goal => {
+            // Insert character at cursor position.
+            app.goal_input.insert(app.input_cursor, c);
+            app.input_cursor += 1;
         }
-        KeyCode::Backspace => {
-            if app.current_tab == Tab::Goal && app.input_cursor > 0 {
-                app.input_cursor -= 1;
-                app.goal_input.remove(app.input_cursor);
-            }
+        KeyCode::Backspace if app.current_tab == Tab::Goal && app.input_cursor > 0 => {
+            app.input_cursor -= 1;
+            app.goal_input.remove(app.input_cursor);
         }
-        KeyCode::Left => {
-            if app.input_cursor > 0 {
-                app.input_cursor -= 1;
-            }
+        KeyCode::Left if app.input_cursor > 0 => {
+            app.input_cursor -= 1;
         }
         KeyCode::Right if app.input_cursor < app.goal_input.len() => {
             app.input_cursor += 1;
