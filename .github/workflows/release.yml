@@ -8,10 +8,6 @@ on:
       tag:
         description: "Existing tag to (re-)release, e.g. v0.1.0"
         required: true
-      publish_crates:
-        description: "Publish to crates.io (requires CARGO_REGISTRY_TOKEN). Leave false for a dry run."
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -146,59 +142,3 @@ jobs:
           generate_release_notes: ${{ steps.notes.outputs.generated == 'true' }}
           prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}
           files: artifacts/*
-
-  publish:
-    name: crates.io
-    runs-on: ubuntu-latest
-    needs: release
-    # Publishing is opt-in and manual only. A tag push builds binaries and cuts
-    # the GitHub Release; re-run this workflow via workflow_dispatch to dry-run
-    # or (with publish_crates=true) actually publish to crates.io.
-    if: github.event_name == 'workflow_dispatch'
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Publish workspace crates in dependency order
-        shell: bash
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-          DO_PUBLISH: ${{ github.event.inputs.publish_crates == 'true' }}
-        run: |
-          set -euo pipefail
-          # Order matters: each crate must already be on the registry before a
-          # dependent crate is published.
-          CRATES=(
-            sentinel-core
-            sentinel-exec
-            sentinel-policy
-            sentinel-capabilities
-            sentinel-audit
-            sentinel-agent-llm
-            sentinel-fleet
-            sentinel-tui
-          )
-          if [ "$DO_PUBLISH" != "true" ]; then
-            echo "::notice::Dry run — re-run this workflow with publish_crates=true to publish."
-            for c in "${CRATES[@]}"; do
-              cargo publish --dry-run --locked -p "$c" --allow-dirty
-            done
-            exit 0
-          fi
-          if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
-            echo "::error::CARGO_REGISTRY_TOKEN is not set."
-            exit 1
-          fi
-          for c in "${CRATES[@]}"; do
-            echo "::group::publish $c"
-            cargo publish --locked -p "$c"
-            # Give the index time to propagate before the next crate resolves it.
-            sleep 45
-            echo "::endgroup::"
-          done
