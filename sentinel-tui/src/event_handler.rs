@@ -33,7 +33,7 @@ pub async fn handle_events(
     match event {
         AppEvent::Key(key) => handle_key(app, key),
         AppEvent::Tick => {
-            // Periodic tick â nothing to do beyond the approval poll above.
+            // Periodic tick — nothing to do beyond the approval poll above.
         }
         AppEvent::SessionUpdate(update) => {
             app.apply_session_update(update);
@@ -76,7 +76,7 @@ fn handle_key(app: &mut App, key: KeyEvent) {
     }
 
     match key.code {
-        // ââ Global quit âââââââââââââââââââââââââââââââââââââââââââââââââââ
+        // ── Global quit ───────────────────────────────────────────────────
         KeyCode::Char('q') | KeyCode::Esc => {
             // On the Goal tab, Esc clears the input; on other tabs it quits.
             if app.current_tab == Tab::Goal && key.code == KeyCode::Esc {
@@ -87,11 +87,11 @@ fn handle_key(app: &mut App, key: KeyEvent) {
             }
         }
 
-        // ââ Tab navigation ââââââââââââââââââââââââââââââââââââââââââââââââ
+        // ── Tab navigation ────────────────────────────────────────────────
         KeyCode::Tab => app.next_tab(),
         KeyCode::BackTab => app.prev_tab(),
 
-        // ââ Scrolling âââââââââââââââââââââââââââââââââââââââââââââââââââââ
+        // ── Scrolling ─────────────────────────────────────────────────────
         KeyCode::Down | KeyCode::Char('j') => {
             match app.current_tab {
                 Tab::Plan => app.plan_scroll_down(),
@@ -105,7 +105,7 @@ fn handle_key(app: &mut App, key: KeyEvent) {
             }
         }
 
-        // ââ Plan approval actions âââââââââââââââââââââââââââââââââââââââââ
+        // ── Plan approval actions ─────────────────────────────────────────
         KeyCode::Char('a') if app.current_tab == Tab::Plan => {
             app.approve_all();
         }
@@ -122,7 +122,7 @@ fn handle_key(app: &mut App, key: KeyEvent) {
         // change behaviour: 'a', 's' and 'r' would start inserting characters.
         KeyCode::Char('a') | KeyCode::Char('s') | KeyCode::Char('r') => {}
 
-        // ââ Goal input (only on Goal tab) âââââââââââââââââââââââââââââââââ
+        // ── Goal input (only on Goal tab) ─────────────────────────────────
         KeyCode::Enter if app.current_tab == Tab::Goal => {
             // Use the host and dry_run stored in app state (set from CLI args
             // in run_tui) rather than hardcoded defaults.
@@ -173,7 +173,7 @@ mod tests {
         }
     }
 
-    // ââ Quit ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+    // ── Quit ──────────────────────────────────────────────────────────────────
 
     #[test]
     fn q_sets_should_quit_on_non_goal_tab() {
@@ -193,7 +193,7 @@ mod tests {
         assert!(app.should_quit);
     }
 
-    // ââ Tab navigation ââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+    // ── Tab navigation ────────────────────────────────────────────────────────
 
     #[test]
     fn tab_key_advances_tab() {
@@ -211,7 +211,7 @@ mod tests {
         assert_eq!(app.current_tab, Tab::Investigation);
     }
 
-    // ââ Goal input ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+    // ── Goal input ────────────────────────────────────────────────────────────
 
     #[test]
     fn char_keys_append_to_goal_on_goal_tab() {
@@ -252,7 +252,7 @@ mod tests {
         assert_eq!(session.host, "prod-web-01");
     }
 
-    // ââ Plan approval âââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+    // ── Plan approval ─────────────────────────────────────────────────────────
 
     #[test]
     fn a_key_approves_all_on_plan_tab() {
@@ -286,7 +286,7 @@ mod tests {
         ));
     }
 
-    // ââ Scroll ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+    // ── Scroll ────────────────────────────────────────────────────────────────
 
     #[test]
     fn j_key_scrolls_down_on_investigation_tab() {
@@ -305,7 +305,7 @@ mod tests {
         assert_eq!(app.log_scroll, 2);
     }
 
-    // ââ Interactive approval modal ââââââââââââââââââââââââââââââââââââââââââââ
+    // ── Interactive approval modal ────────────────────────────────────────────
 
     fn approving_app() -> (App, tokio::sync::oneshot::Receiver<ApprovalOutcome>) {
         use crate::app::PlanStep;
@@ -356,7 +356,7 @@ mod tests {
         assert!(app.is_approving());
     }
 
-    // ââ Async handle_events âââââââââââââââââââââââââââââââââââââââââââââââââââ
+    // ── Async handle_events ───────────────────────────────────────────────────
 
     #[tokio::test]
     async fn handle_tick_is_noop() {
