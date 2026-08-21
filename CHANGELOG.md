@@ -13,16 +13,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Tag-driven release automation: verification (fmt, clippy, tests, `cargo audit`),
   four-target binary builds (`x86_64-unknown-linux-gnu`,
   `x86_64-unknown-linux-musl`, `aarch64-apple-darwin`, `x86_64-apple-darwin`)
-  with SHA-256 sums, GitHub Release creation from the CHANGELOG section, and an
-  opt-in crates.io publish that walks the workspace in dependency order
+  with SHA-256 sums, and GitHub Release creation from the CHANGELOG section
+- `rust-version = "1.86"` on `workspace.package`, so cargo reports the real
+  minimum supported Rust version instead of failing deep inside a dependency
 
 ### Changed
 - License declaration reconciled to **MIT**, matching `LICENSE` and the README
   badge — `workspace.package.license` previously declared Apache-2.0
 - Workspace-internal dependencies now carry an explicit `version` alongside
-  `path`; without it `cargo publish` rejects every crate in the workspace
+  `path` (required of any crate that is ever published)
+- Removed the crates.io badge and publish step. `sentinel-agent` — the crate the
+  badge advertised — has never existed, and `sentinel-core` and `sentinel-tui` are
+  registered to other authors, so the workspace cannot be published under these
+  names. Releases ship binaries and container images only
+- Documented minimum Rust version corrected from 1.75 to **1.86** in the README
+  and CONTRIBUTING.md
 
 ### Fixed
+- `docker build` could not succeed: the builder image was `rust:1.82-slim`, but
+  `ratatui 0.30` requires Rust 1.86 and `clap 4.6` requires 1.85, so cargo refused
+  the workspace before compiling anything. Builder bumped to `rust:1.86-slim`
+- Terminal output and log messages in `sentinel-tui` printed mojibake: box-drawing
+  rules, em dashes, arrows and ellipses had been committed as double-encoded UTF-8
+  (`â` sequences), so `sentinel run` rendered `â──â──` instead of `──`. 3,096
+  sequences repaired across the four TUI sources and the Dockerfile
 - `cargo clippy --workspace --all-targets -- -D warnings` — the exact command the
   CI lint step runs — failed on current stable with eight `collapsible_match`
   errors in `sentinel-tui`. The TUI key handler now uses match guards. Behaviour
