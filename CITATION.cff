@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "Sentinel"
+version: "0.1.0"
+repository-code: "https://github.com/marcuspat/Sentinel"
+license: "MIT"
+abstract: "Safe, auditable agentic sysadmin tool in Rust — an LLM-driven Investigate to Plan to Approve to Act loop with a deny-by-default policy engine, operator approval gate, and hash-chained audit log."
+authors:
+  - name: "Sentinel Contributors"
