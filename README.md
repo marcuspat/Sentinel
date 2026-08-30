@@ -27,6 +27,17 @@ hash-chained audit log.
 - **Fleet mode** — mutual TLS (rcgen + rustls 0.23), staged rollouts
 - **Interactive TUI** — ratatui 0.30, full keyboard navigation
 
+## Install
+
+Build from source — `sentinel` isn't published to crates.io (the crate name is already taken by an unrelated project):
+
+```bash
+git clone https://github.com/marcuspat/Sentinel
+cd Sentinel
+cargo build --release
+# binary at target/release/sentinel
+```
+
 ## Quick Start
 
 ```bash
@@ -107,13 +118,17 @@ sentinel-tui           — ratatui TUI: 5 tabs, approval workflow, clap CLI
 See [docs/adr/](docs/adr/) for full Architecture Decision Records and
 [docs/ddd/](docs/ddd/) for Domain-Driven Design documentation.
 
+## Sentinel vs. Ansible / plain SSH
+
+Ansible and hand-rolled SSH scripts run what you tell them to, without judgment. Sentinel's LLM proposes the fix from a live investigation, but nothing mutates until an operator approves it — every action still passes through the same deny-by-default policy engine, resource guards, and hash-chained audit log regardless of who or what proposed it. Reach for Ansible/SSH when the fix is a known, repeatable playbook; reach for Sentinel when the fix isn't known ahead of time and you want a verifiable record of exactly what an agent was allowed to do about it.
+
 ## Ecosystem
 
 | Repo | What it does |
 |------|-------------|
 | [**codescope**](https://github.com/adventurewave-labs/codescope) | Rust code-intelligence engine for AI agents — no cloud, no DB |
 | [**secret-scan**](https://github.com/adventurewave-labs/secret-scan) | Rust secret scanner — obfuscation detection |
-| [**turbo-flow**](https://github.com/adventurewave-labs/turbo-flow) | Agentic dev environment — 60+ AI subagents, SPARC methodology |
+| [**turbo-flow**](https://github.com/marcuspat/turbo-flow) | Agentic dev environment — Ruflo v3.5 orchestration, 215+ MCP tools |
 
 ## License
 
