@@ -164,7 +164,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-// ââ TUI entry point âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ── TUI entry point ───────────────────────────────────────────────────────────
 
 async fn run_tui(
     host: String,
@@ -221,11 +221,11 @@ async fn run_app(
     model: String,
 ) -> Result<()> {
     loop {
-        // ââ Drain live agent updates ââââââââââââââââââââââââââââââââââââââ
+        // ── Drain live agent updates ──────────────────────────────────────
         app.poll_session_updates();
         app.poll_approval();
 
-        // ââ Spawn agent task when a new goal arrives ââââââââââââââââââââââ
+        // ── Spawn agent task when a new goal arrives ──────────────────────
         if let Some(goal) = app.pending_goal.take() {
             let (update_tx, update_rx) = mpsc::channel(128);
             let (approval_tx, approval_rx) = mpsc::channel(4);
@@ -245,10 +245,10 @@ async fn run_app(
             tokio::spawn(run_agent_session(config, update_tx, approval_tx));
         }
 
-        // ââ Render ââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+        // ── Render ────────────────────────────────────────────────────────
         terminal.draw(|f| ui::draw(f, app))?;
 
-        // ââ Input âââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+        // ── Input ─────────────────────────────────────────────────────────
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
                 handle_events(app, AppEvent::Key(key)).await?;
@@ -264,10 +264,10 @@ async fn run_app(
     Ok(())
 }
 
-// ââ Subcommand handlers âââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ── Subcommand handlers ───────────────────────────────────────────────────────
 
-/// Wire the full agent stack â LLM backend, executor, capabilities, registry,
-/// policy, audit log â and drive an investigate â plan â approve â act session.
+/// Wire the full agent stack — LLM backend, executor, capabilities, registry,
+/// policy, audit log — and drive an investigate → plan → approve → act session.
 #[allow(clippy::too_many_arguments)]
 async fn run_agent(
     goal: String,
@@ -335,12 +335,12 @@ async fn run_agent(
     println!();
 
     // Investigate.
-    println!("ââ Investigating ââ");
+    println!("── Investigating ──");
     let observations = agent.investigate(session_id, &goal, &host).await?;
     println!("Collected {} observation(s).", observations.len());
 
     // Plan.
-    println!("\nââ Planning ââ");
+    println!("\n── Planning ──");
     let mut plan = agent.plan(session_id, &goal, &observations).await?;
     println!("Rationale    : {}", plan.rationale);
     println!("Overall risk : {:?}", plan.overall_risk);
@@ -363,7 +363,7 @@ async fn run_agent(
 
     // Approve.
     let approval = if auto_approve {
-        println!("\nAuto-approve enabled â executing plan.");
+        println!("\nAuto-approve enabled — executing plan.");
         ApprovalDecision::FullApproval
     } else {
         use std::io::Write as _;
@@ -387,7 +387,7 @@ async fn run_agent(
     }
 
     // Act.
-    println!("\nââ Executing ââ");
+    println!("\n── Executing ──");
     let summary = agent
         .execute_plan(session_id, &host, &mut plan, approval)
         .await?;
@@ -441,18 +441,18 @@ async fn run_fleet(
         match &results[hostname] {
             CapabilityResult::Success { output } => {
                 ok += 1;
-                println!("â {hostname}: success");
+                println!("✔ {hostname}: success");
                 if let Ok(pretty) = serde_json::to_string(output) {
                     println!("    {pretty}");
                 }
             }
             CapabilityResult::Failure { error, .. } => {
                 failed += 1;
-                println!("x {hostname}: FAILED â {error}");
+                println!("x {hostname}: FAILED — {error}");
             }
             CapabilityResult::DryRun { predicted_effect } => {
                 ok += 1;
-                println!("â¢ {hostname}: dry-run");
+                println!("• {hostname}: dry-run");
                 if let Ok(pretty) = serde_json::to_string(predicted_effect) {
                     println!("    {pretty}");
                 }
@@ -487,7 +487,7 @@ fn show_policy() {
     let rules = evaluator.rules();
 
     println!(
-        "Default Sentinel policy (deny-by-default) â {} rule(s):",
+        "Default Sentinel policy (deny-by-default) — {} rule(s):",
         rules.len()
     );
     println!("{:-<78}", "");
@@ -570,12 +570,12 @@ fn verify_audit(path: &std::path::Path) -> Result<()> {
 
     if result.valid {
         println!(
-            "Audit log VALID â {} event(s) verified.",
+            "Audit log VALID — {} event(s) verified.",
             result.events_checked
         );
     } else {
         eprintln!(
-            "Audit log INVALID â chain broken at sequence {}.",
+            "Audit log INVALID — chain broken at sequence {}.",
             result.first_broken_at.unwrap_or(0)
         );
         if let Some(err) = &result.error {

@@ -60,7 +60,7 @@ sentinel --backend ollama --model llama3 run "Check CPU load"
 ## Build
 
 ```bash
-# Requires Rust 1.75+
+# Requires Rust 1.86+ (ratatui 0.30 and clap 4.6 set the floor)
 cargo build --release
 
 # Run all tests
