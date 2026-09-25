@@ -117,7 +117,10 @@ impl ReasoningLoop {
             .into_iter()
             .map(|cap| (cap.manifest().id.clone(), cap))
             .collect();
-        info!(count = self.capability_impls.len(), "capability implementations registered");
+        info!(
+            count = self.capability_impls.len(),
+            "capability implementations registered"
+        );
         self
     }
 
@@ -145,7 +148,9 @@ impl ReasoningLoop {
             let mut log = self.audit_log.lock().await;
             log.append(AuditEventType::InvestigationStarted)
                 .await
-                .map_err(|e| AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string())))?;
+                .map_err(|e| {
+                    AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string()))
+                })?;
         }
 
         let all_caps = self.capability_registry.all_cloned();
@@ -182,8 +187,7 @@ impl ReasoningLoop {
             debug!(session_id = %session_id, round, "investigation round");
 
             // Build the conversation for this turn.
-            let user_turn =
-                PromptBuilder::investigation_turn(goal, &observations);
+            let user_turn = PromptBuilder::investigation_turn(goal, &observations);
 
             let messages = vec![
                 Message::system(system_prompt.clone()),
@@ -258,7 +262,11 @@ impl ReasoningLoop {
                             rule_id: decision.matched_rule.clone(),
                         })
                         .await
-                        .map_err(|e| AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string())))?;
+                        .map_err(|e| {
+                            AgentError::Core(sentinel_core::CoreError::ExecutionFailed(
+                                e.to_string(),
+                            ))
+                        })?;
                     }
 
                     if !decision.is_allowed() {
@@ -280,11 +288,7 @@ impl ReasoningLoop {
                             format!("Policy denied: {reason}"),
                             false,
                         );
-                        observations.push(Observation::new(
-                            req.capability_id,
-                            req.args,
-                            result,
-                        ));
+                        observations.push(Observation::new(req.capability_id, req.args, result));
                         continue;
                     }
 
@@ -319,8 +323,12 @@ impl ReasoningLoop {
                     {
                         let mut log = self.audit_log.lock().await;
                         let result_summary = match &result {
-                            sentinel_core::CapabilityResult::Success { .. } => "success".to_string(),
-                            sentinel_core::CapabilityResult::Failure { error, .. } => format!("failure: {error}"),
+                            sentinel_core::CapabilityResult::Success { .. } => {
+                                "success".to_string()
+                            }
+                            sentinel_core::CapabilityResult::Failure { error, .. } => {
+                                format!("failure: {error}")
+                            }
                             sentinel_core::CapabilityResult::DryRun { .. } => "dry-run".to_string(),
                         };
                         log.append(AuditEventType::ObservationRecorded {
@@ -329,14 +337,14 @@ impl ReasoningLoop {
                             result_summary,
                         })
                         .await
-                        .map_err(|e| AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string())))?;
+                        .map_err(|e| {
+                            AgentError::Core(sentinel_core::CoreError::ExecutionFailed(
+                                e.to_string(),
+                            ))
+                        })?;
                     }
 
-                    observations.push(Observation::new(
-                        req.capability_id,
-                        req.args,
-                        result,
-                    ));
+                    observations.push(Observation::new(req.capability_id, req.args, result));
                 }
             }
         }
@@ -367,13 +375,9 @@ impl ReasoningLoop {
 
         let all_caps = self.capability_registry.all_cloned();
         let system_prompt = PromptBuilder::planning_system(&all_caps);
-        let user_message =
-            PromptBuilder::planning_user_with_observations(goal, observations);
+        let user_message = PromptBuilder::planning_user_with_observations(goal, observations);
 
-        let messages = vec![
-            Message::system(system_prompt),
-            Message::user(user_message),
-        ];
+        let messages = vec![Message::system(system_prompt), Message::user(user_message)];
 
         let llm_response = self
             .backend
@@ -385,8 +389,12 @@ impl ReasoningLoop {
             "LLM planning response received"
         );
 
-        let plan =
-            PlanParser::parse(session_id, goal, &llm_response.content, &self.capability_registry)?;
+        let plan = PlanParser::parse(
+            session_id,
+            goal,
+            &llm_response.content,
+            &self.capability_registry,
+        )?;
 
         // Audit the plan proposal.
         {
@@ -397,7 +405,9 @@ impl ReasoningLoop {
                 overall_risk: format!("{:?}", plan.overall_risk),
             })
             .await
-            .map_err(|e| AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string())))?;
+            .map_err(|e| {
+                AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string()))
+            })?;
         }
 
         info!(
@@ -454,7 +464,9 @@ impl ReasoningLoop {
                         reason: reason.clone(),
                     })
                     .await
-                    .map_err(|e| AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string())))?;
+                    .map_err(|e| {
+                        AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string()))
+                    })?;
                 }
                 _ => {
                     log.append(AuditEventType::PlanApproved {
@@ -462,7 +474,9 @@ impl ReasoningLoop {
                         approval_mode: mode.to_string(),
                     })
                     .await
-                    .map_err(|e| AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string())))?;
+                    .map_err(|e| {
+                        AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string()))
+                    })?;
                 }
             }
         }
@@ -536,13 +550,17 @@ impl ReasoningLoop {
                     rule_id: decision.matched_rule.clone(),
                 })
                 .await
-                .map_err(|e| AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string())))?;
+                .map_err(|e| {
+                    AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string()))
+                })?;
             }
 
             if !decision.is_allowed() {
                 let reason = match &decision.effect {
                     PolicyEffect::Denied { reason } => reason.clone(),
-                    PolicyEffect::RequiresApproval => "step requires additional approval".to_string(),
+                    PolicyEffect::RequiresApproval => {
+                        "step requires additional approval".to_string()
+                    }
                     _ => "policy denied".to_string(),
                 };
 
@@ -553,7 +571,9 @@ impl ReasoningLoop {
                         reason: reason.clone(),
                     })
                     .await
-                    .map_err(|e| AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string())))?;
+                    .map_err(|e| {
+                        AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string()))
+                    })?;
                 }
 
                 plan.steps[i].status = StepStatus::Skipped;
@@ -573,7 +593,9 @@ impl ReasoningLoop {
                     risk_tier: format!("{:?}", risk_tier),
                 })
                 .await
-                .map_err(|e| AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string())))?;
+                .map_err(|e| {
+                    AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string()))
+                })?;
             }
 
             let ctx = ExecutionContext::new(session_id, host);
@@ -596,7 +618,11 @@ impl ReasoningLoop {
                             duration_ms,
                         })
                         .await
-                        .map_err(|e| AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string())))?;
+                        .map_err(|e| {
+                            AgentError::Core(sentinel_core::CoreError::ExecutionFailed(
+                                e.to_string(),
+                            ))
+                        })?;
                     }
 
                     info!(
@@ -619,7 +645,11 @@ impl ReasoningLoop {
                             error: err_msg.clone(),
                         })
                         .await
-                        .map_err(|e| AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string())))?;
+                        .map_err(|e| {
+                            AgentError::Core(sentinel_core::CoreError::ExecutionFailed(
+                                e.to_string(),
+                            ))
+                        })?;
                     }
 
                     error!(
@@ -649,10 +679,19 @@ impl ReasoningLoop {
                     // Invoke the capability's inverse to actually undo the effect.
                     if let Some(cap) = self.capability_impls.get(&capability_id) {
                         let rb_ctx = ExecutionContext::new(session_id, host);
-                        match cap.invoke_inverse(plan.steps[step_idx].args.clone(), &rb_ctx).await {
-                            Some(sentinel_core::CapabilityResult::Success { .. }) => info!(capability_id = %capability_id, "rollback succeeded"),
-                            Some(sentinel_core::CapabilityResult::Failure { error, .. }) => warn!(capability_id = %capability_id, error = %error, "rollback failed"),
-                            None => info!(capability_id = %capability_id, "capability has no inverse"),
+                        match cap
+                            .invoke_inverse(plan.steps[step_idx].args.clone(), &rb_ctx)
+                            .await
+                        {
+                            Some(sentinel_core::CapabilityResult::Success { .. }) => {
+                                info!(capability_id = %capability_id, "rollback succeeded")
+                            }
+                            Some(sentinel_core::CapabilityResult::Failure { error, .. }) => {
+                                warn!(capability_id = %capability_id, error = %error, "rollback failed")
+                            }
+                            None => {
+                                info!(capability_id = %capability_id, "capability has no inverse")
+                            }
                             _ => {}
                         }
                     }
@@ -663,11 +702,13 @@ impl ReasoningLoop {
 
                     {
                         let mut log = self.audit_log.lock().await;
-                        log.append(AuditEventType::CapabilityRolledBack {
-                            capability_id,
-                        })
-                        .await
-                        .map_err(|e| AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string())))?;
+                        log.append(AuditEventType::CapabilityRolledBack { capability_id })
+                            .await
+                            .map_err(|e| {
+                                AgentError::Core(sentinel_core::CoreError::ExecutionFailed(
+                                    e.to_string(),
+                                ))
+                            })?;
                     }
                 }
             }
@@ -689,7 +730,9 @@ impl ReasoningLoop {
                 capabilities_executed: steps_completed as u64,
             })
             .await
-            .map_err(|e| AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string())))?;
+            .map_err(|e| {
+                AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string()))
+            })?;
         }
 
         info!(
@@ -726,9 +769,11 @@ impl ReasoningLoop {
             Ok(result)
         } else {
             debug!(capability_id = %capability_id, "stub invocation — no implementation registered");
-            Ok(sentinel_core::CapabilityResult::success(serde_json::json!({
-                "stub": true, "capability_id": capability_id
-            })))
+            Ok(sentinel_core::CapabilityResult::success(
+                serde_json::json!({
+                    "stub": true, "capability_id": capability_id
+                }),
+            ))
         }
     }
 }
@@ -742,7 +787,7 @@ mod tests {
 
     use sentinel_audit::AuditLog;
     use sentinel_core::{CapabilityKind, CapabilityManifest, RiskTier};
-    use sentinel_policy::{KillSwitch, PolicyEvaluator, RuleEffect, PolicyRule};
+    use sentinel_policy::{KillSwitch, PolicyEvaluator, PolicyRule, RuleEffect};
     use tokio::sync::Mutex;
 
     use crate::backend::{LlmBackend, LlmResponse, Message};
@@ -782,13 +827,9 @@ mod tests {
             let idx = self
                 .call_count
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let content = self
-                .responses
-                .get(idx)
-                .cloned()
-                .unwrap_or_else(|| {
-                    r#"{"done_investigating": true, "reasoning": "fallback done"}"#.to_string()
-                });
+            let content = self.responses.get(idx).cloned().unwrap_or_else(|| {
+                r#"{"done_investigating": true, "reasoning": "fallback done"}"#.to_string()
+            });
             Ok(LlmResponse {
                 content,
                 model: "mock-model".to_string(),
@@ -956,7 +997,10 @@ mod tests {
         assert!(observations[0].result.is_failure());
         // Verify the error message contains Policy denied.
         if let sentinel_core::CapabilityResult::Failure { error, .. } = &observations[0].result {
-            assert!(error.contains("Policy denied"), "expected 'Policy denied' in: {error}");
+            assert!(
+                error.contains("Policy denied"),
+                "expected 'Policy denied' in: {error}"
+            );
         }
     }
 
@@ -981,13 +1025,7 @@ mod tests {
             ..make_config()
         };
 
-        let loop_ = ReasoningLoop::new(
-            Box::new(backend),
-            registry,
-            evaluator,
-            audit_log,
-            config,
-        );
+        let loop_ = ReasoningLoop::new(Box::new(backend), registry, evaluator, audit_log, config);
 
         let err = loop_
             .investigate(session_id, "goal", "localhost")
@@ -1030,10 +1068,7 @@ mod tests {
             make_config(),
         );
 
-        let plan = loop_
-            .plan(session_id, "Restart nginx", &[])
-            .await
-            .unwrap();
+        let plan = loop_.plan(session_id, "Restart nginx", &[]).await.unwrap();
 
         assert_eq!(plan.steps.len(), 1);
         assert_eq!(plan.steps[0].capability_id, "restart_service");
@@ -1061,7 +1096,12 @@ mod tests {
         // plan.approval defaults to ApprovalDecision::Pending → not approved
 
         let err = loop_
-            .execute_plan(session_id, "localhost", &mut plan, ApprovalDecision::Pending)
+            .execute_plan(
+                session_id,
+                "localhost",
+                &mut plan,
+                ApprovalDecision::Pending,
+            )
             .await
             .unwrap_err();
 
@@ -1095,7 +1135,12 @@ mod tests {
         plan.approve();
 
         let summary = loop_
-            .execute_plan(session_id, "localhost", &mut plan, ApprovalDecision::FullApproval)
+            .execute_plan(
+                session_id,
+                "localhost",
+                &mut plan,
+                ApprovalDecision::FullApproval,
+            )
             .await
             .unwrap();
 
