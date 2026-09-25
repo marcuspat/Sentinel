@@ -20,9 +20,8 @@ impl AuditVerifier {
             if trimmed.is_empty() {
                 continue;
             }
-            let event: AuditEvent = serde_json::from_str(trimmed).map_err(|e| {
-                AuditError::InvalidEvent(format!("line {}: {e}", line_no + 1))
-            })?;
+            let event: AuditEvent = serde_json::from_str(trimmed)
+                .map_err(|e| AuditError::InvalidEvent(format!("line {}: {e}", line_no + 1)))?;
             events.push(event);
         }
 

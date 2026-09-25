@@ -85,7 +85,12 @@ impl RecordingExecutor {
     #[allow(clippy::type_complexity)]
     fn new() -> (Arc<Self>, Arc<Mutex<Vec<(String, Vec<String>)>>>) {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        (Arc::new(Self { calls: Arc::clone(&calls) }), calls)
+        (
+            Arc::new(Self {
+                calls: Arc::clone(&calls),
+            }),
+            calls,
+        )
     }
 }
 
@@ -99,7 +104,10 @@ impl CommandExecutorTrait for RecordingExecutor {
         _max_output_bytes: usize,
     ) -> Result<CommandOutput, ExecError> {
         let mut guard = self.calls.lock().await;
-        guard.push((program.to_string(), args.iter().map(|s| s.to_string()).collect()));
+        guard.push((
+            program.to_string(),
+            args.iter().map(|s| s.to_string()).collect(),
+        ));
 
         // Return canned success output so capabilities don't fail on parse.
         let stdout = match program {
@@ -133,7 +141,11 @@ fn make_allow_all_policy() -> Arc<PolicyEvaluator> {
         priority: 1000,
         enabled: true,
     };
-    Arc::new(PolicyEvaluator::new(vec![allow_all], KillSwitch::new(), vec![]))
+    Arc::new(PolicyEvaluator::new(
+        vec![allow_all],
+        KillSwitch::new(),
+        vec![],
+    ))
 }
 
 fn make_registry_from_caps(caps: &[Box<dyn sentinel_core::Capability>]) -> Arc<CapabilityRegistry> {
@@ -199,14 +211,23 @@ async fn integration_investigate_calls_real_capability() {
             output.get("stub").is_none(),
             "result should not be a stub: {output}"
         );
-        assert!(output.get("df_output").is_some(), "expected df_output in result");
+        assert!(
+            output.get("df_output").is_some(),
+            "expected df_output in result"
+        );
     }
 
     // Verify the executor was actually called with df and du.
     let recorded = calls.lock().await;
     let programs: Vec<&str> = recorded.iter().map(|(p, _)| p.as_str()).collect();
-    assert!(programs.contains(&"df"), "expected df invocation, got: {programs:?}");
-    assert!(programs.contains(&"du"), "expected du invocation, got: {programs:?}");
+    assert!(
+        programs.contains(&"df"),
+        "expected df invocation, got: {programs:?}"
+    );
+    assert!(
+        programs.contains(&"du"),
+        "expected du invocation, got: {programs:?}"
+    );
 }
 
 /// Verify the full Investigate → Plan → Execute loop end-to-end.
@@ -274,7 +295,12 @@ async fn integration_full_loop_investigate_plan_execute() {
 
     // Execute
     let summary = loop_
-        .execute_plan(session_id, "localhost", &mut plan, ApprovalDecision::FullApproval)
+        .execute_plan(
+            session_id,
+            "localhost",
+            &mut plan,
+            ApprovalDecision::FullApproval,
+        )
         .await
         .unwrap();
 
@@ -309,14 +335,8 @@ async fn integration_policy_deny_in_investigation() {
         r#"{"done_investigating": true, "reasoning": "was denied, stopping"}"#,
     ]);
 
-    let loop_ = ReasoningLoop::new(
-        Box::new(backend),
-        registry,
-        policy,
-        audit,
-        fast_config(),
-    )
-    .with_capabilities(caps);
+    let loop_ = ReasoningLoop::new(Box::new(backend), registry, policy, audit, fast_config())
+        .with_capabilities(caps);
 
     let observations = loop_
         .investigate(session_id, "check disk", "localhost")
@@ -327,7 +347,10 @@ async fn integration_policy_deny_in_investigation() {
     // Observation should be a failure with "Policy denied" in the error.
     assert!(observations[0].result.is_failure());
     if let sentinel_core::CapabilityResult::Failure { error, .. } = &observations[0].result {
-        assert!(error.contains("Policy denied"), "expected policy denial: {error}");
+        assert!(
+            error.contains("Policy denied"),
+            "expected policy denial: {error}"
+        );
     }
 }
 
@@ -346,7 +369,10 @@ async fn integration_audit_chain_valid_after_execution() {
     // Use a temp file for the audit log so we can verify it afterward.
     let dir = tempfile::tempdir().unwrap();
     let log_path = dir.path().join("audit.jsonl");
-    let audit = Arc::new(Mutex::new(AuditLog::new(session_id, Some(log_path.clone()))));
+    let audit = Arc::new(Mutex::new(AuditLog::new(
+        session_id,
+        Some(log_path.clone()),
+    )));
 
     let backend = SequentialMockBackend::new(vec![
         r#"{"done_investigating": true, "reasoning": "quick goal"}"#,
@@ -362,17 +388,34 @@ async fn integration_audit_chain_valid_after_execution() {
     )
     .with_capabilities(caps);
 
-    let observations = loop_.investigate(session_id, "check disk", "localhost").await.unwrap();
-    let mut plan = loop_.plan(session_id, "check disk", &observations).await.unwrap();
+    let observations = loop_
+        .investigate(session_id, "check disk", "localhost")
+        .await
+        .unwrap();
+    let mut plan = loop_
+        .plan(session_id, "check disk", &observations)
+        .await
+        .unwrap();
     plan.approve();
-    loop_.execute_plan(session_id, "localhost", &mut plan, ApprovalDecision::FullApproval).await.unwrap();
+    loop_
+        .execute_plan(
+            session_id,
+            "localhost",
+            &mut plan,
+            ApprovalDecision::FullApproval,
+        )
+        .await
+        .unwrap();
 
     // Each append is persisted immediately, so the JSONL file is already on disk.
     // Read and verify the JSONL chain
     let content = std::fs::read_to_string(&log_path).unwrap();
     let result = AuditVerifier::verify_jsonl(&content).unwrap();
     assert!(result.valid, "audit chain should be valid after execution");
-    assert!(result.events_checked > 0, "should have checked at least one event");
+    assert!(
+        result.events_checked > 0,
+        "should have checked at least one event"
+    );
 }
 
 /// Verify that 14 capabilities are registered and all have unique IDs.
@@ -381,7 +424,12 @@ async fn integration_all_14_capabilities_registered() {
     let (executor, _) = RecordingExecutor::new();
     let caps = all_capabilities(executor);
 
-    assert_eq!(caps.len(), 14, "expected exactly 14 capabilities, got {}", caps.len());
+    assert_eq!(
+        caps.len(),
+        14,
+        "expected exactly 14 capabilities, got {}",
+        caps.len()
+    );
 
     let mut ids = std::collections::HashSet::new();
     for cap in &caps {
@@ -418,7 +466,10 @@ async fn integration_stub_mode_still_works() {
     // No .with_capabilities() call — stub mode
     let loop_ = ReasoningLoop::new(Box::new(backend), registry, policy, audit, fast_config());
 
-    let obs = loop_.investigate(session_id, "goal", "localhost").await.unwrap();
+    let obs = loop_
+        .investigate(session_id, "goal", "localhost")
+        .await
+        .unwrap();
     assert_eq!(obs.len(), 1);
     assert!(obs[0].result.is_success());
     // Stub result contains {"stub": true}
