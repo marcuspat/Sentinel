@@ -314,7 +314,12 @@ mod tests {
     use super::*;
     use sentinel_core::{CapabilityKind, CapabilityManifest, RiskTier};
 
-    fn make_manifest(id: &str, risk: RiskTier, description: &str, has_inverse: bool) -> CapabilityManifest {
+    fn make_manifest(
+        id: &str,
+        risk: RiskTier,
+        description: &str,
+        has_inverse: bool,
+    ) -> CapabilityManifest {
         CapabilityManifest {
             id: id.to_string(),
             name: id.to_string(),
@@ -349,9 +354,12 @@ mod tests {
 
     #[test]
     fn planning_system_contains_schema() {
-        let caps = vec![
-            make_manifest("restart_service", RiskTier::Medium, "Restart a service", true),
-        ];
+        let caps = vec![make_manifest(
+            "restart_service",
+            RiskTier::Medium,
+            "Restart a service",
+            true,
+        )];
         let prompt = PromptBuilder::planning_system(&caps);
         assert!(prompt.contains("rationale"));
         assert!(prompt.contains("capability_id"));
@@ -369,8 +377,8 @@ mod tests {
 
     #[test]
     fn planning_user_with_observation() {
-        use sentinel_core::CapabilityResult;
         use crate::planner::Observation;
+        use sentinel_core::CapabilityResult;
 
         let obs = Observation {
             id: uuid::Uuid::new_v4(),
@@ -394,8 +402,8 @@ mod tests {
 
     #[test]
     fn investigation_turn_with_observations() {
-        use sentinel_core::CapabilityResult;
         use crate::planner::Observation;
+        use sentinel_core::CapabilityResult;
 
         let obs = Observation {
             id: uuid::Uuid::new_v4(),
@@ -421,18 +429,24 @@ mod tests {
 
     #[test]
     fn capability_with_rollback_shows_flag() {
-        let caps = vec![
-            make_manifest("write_file", RiskTier::Medium, "Write a file", true),
-        ];
+        let caps = vec![make_manifest(
+            "write_file",
+            RiskTier::Medium,
+            "Write a file",
+            true,
+        )];
         let prompt = PromptBuilder::investigation_system(&caps);
         assert!(prompt.contains("supports rollback"));
     }
 
     #[test]
     fn critical_capability_shows_risk() {
-        let caps = vec![
-            make_manifest("wipe_disk", RiskTier::Critical, "Wipe all data", false),
-        ];
+        let caps = vec![make_manifest(
+            "wipe_disk",
+            RiskTier::Critical,
+            "Wipe all data",
+            false,
+        )];
         let prompt = PromptBuilder::investigation_system(&caps);
         assert!(prompt.contains("CRITICAL"));
     }
