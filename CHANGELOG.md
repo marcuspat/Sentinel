@@ -7,6 +7,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **MCP policy gate** (`sentinel-mcp` crate, ADR-013): `sentinel serve --mcp`
+  speaks MCP over stdio and exposes five tools: `sentinel_capabilities`,
+  `sentinel_policy_check` (dry policy evaluation with the matching rule),
+  `sentinel_investigate` (read-only capabilities only), `sentinel_propose_plan`
+  (validates and stores a `PendingApproval` plan and never executes) and
+  `sentinel_plan_status`. There is no approve or execute tool
+- Operator commands for gate plans: `sentinel plans`, `show-plan`, `approve`
+  (interactive terminal required), `reject` and `execute` (refuses unapproved
+  plans and plans whose content changed after approval). File-backed plan store
+  under `--state-dir` / `$SENTINEL_STATE_DIR` (default
+  `$XDG_STATE_HOME/sentinel`)
+- `AuditEventType::McpToolCalled`, recorded before every MCP tool call; the
+  gate, `approve`, `reject` and `execute` each write their own hash-chained log
+  under `<state-dir>/audit/`
+- `plans/SPEC-mcp-gate-and-arena.md`: gate spec, Sentinel Arena design (not
+  deployed), crates.io naming check, milestones
 - `CONTRIBUTING.md` covering development setup, workspace layout and bounded
   contexts, code style, testing expectations, ADR process, and the
   security-sensitive areas that get extra review
@@ -17,6 +33,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   opt-in crates.io publish that walks the workspace in dependency order
 
 ### Changed
+- Tracing output from every `sentinel` subcommand now goes to stderr (was
+  stdout), so stdout carries only command output or, under `serve --mcp`, the
+  JSON-RPC stream
 - License declaration reconciled to **MIT**, matching `LICENSE` and the README
   badge — `workspace.package.license` previously declared Apache-2.0
 - Workspace-internal dependencies now carry an explicit `version` alongside

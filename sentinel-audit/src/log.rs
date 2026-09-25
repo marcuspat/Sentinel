@@ -242,6 +242,7 @@ fn event_type_label(et: &AuditEventType) -> String {
         } => format!(
             "FleetCommandDispatched cmd={command_id} hosts={host_count}"
         ),
+        AuditEventType::McpToolCalled { tool, .. } => format!("McpToolCalled tool={tool}"),
     }
 }
 

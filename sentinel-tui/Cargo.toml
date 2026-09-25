@@ -16,6 +16,7 @@ sentinel-audit = { workspace = true }
 sentinel-capabilities = { workspace = true }
 sentinel-exec = { workspace = true }
 sentinel-fleet = { workspace = true }
+sentinel-mcp = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -32,3 +33,4 @@ anyhow = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+tempfile = { workspace = true }

@@ -1,0 +1,28 @@
+[package]
+name = "sentinel-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "MCP (Model Context Protocol) policy gate for Sentinel: lets coding agents query policy, run read-only investigations, and propose plans that only an operator can approve"
+
+[dependencies]
+sentinel-core = { workspace = true }
+sentinel-policy = { workspace = true }
+sentinel-audit = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+
+[dev-dependencies]
+async-trait = { workspace = true }
+sentinel-capabilities = { workspace = true }
+sentinel-exec = { workspace = true }
+tempfile = { workspace = true }
