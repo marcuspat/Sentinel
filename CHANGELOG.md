@@ -6,6 +6,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security
+- **Prompt-injection hardening (ADR-013).** Capability output is now
+  *spotlighted*: wrapped in nonce-tagged `UNTRUSTED-DATA` fences with forged
+  fences neutralised, and both system prompts tell the model that fenced
+  content is data, never instructions. A heuristic tripwire flags common
+  injection phrasings in observations; hits are logged and written to the
+  hash-chained audit log as a new `SuspectedPromptInjection` event
+
+### Fixed
+- Investigation prompts panicked when truncating capability output whose
+  2 000th byte fell inside a multi-byte UTF-8 character. Truncation is now
+  char-boundary safe, and planning prompts, which previously had no limit, are
+  now capped per observation
+
 ### Added
 - `CONTRIBUTING.md` covering development setup, workspace layout and bounded
   contexts, code style, testing expectations, ADR process, and the

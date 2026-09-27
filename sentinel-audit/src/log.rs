@@ -231,6 +231,13 @@ fn event_type_label(et: &AuditEventType) -> String {
             command_id,
             host_count,
         } => format!("FleetCommandDispatched cmd={command_id} hosts={host_count}"),
+        AuditEventType::SuspectedPromptInjection {
+            capability_id,
+            patterns,
+        } => format!(
+            "SuspectedPromptInjection cap={capability_id} patterns={}",
+            patterns.join("|")
+        ),
     }
 }
 

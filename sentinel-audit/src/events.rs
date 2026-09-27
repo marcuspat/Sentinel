@@ -80,6 +80,13 @@ pub enum AuditEventType {
         command_id: Uuid,
         host_count: usize,
     },
+    /// Capability output matched one or more prompt-injection heuristics.
+    /// The data is still passed to the LLM (spotlighted), but the event is
+    /// recorded so operators can see an attempted injection in the audit trail.
+    SuspectedPromptInjection {
+        capability_id: String,
+        patterns: Vec<String>,
+    },
 }
 
 /// A single entry in the audit log, carrying its position in the hash chain.
