@@ -206,9 +206,7 @@ impl LlmBackend for OpenAiBackend {
             model: api_response.model,
             input_tokens: api_response.usage.prompt_tokens,
             output_tokens: api_response.usage.completion_tokens,
-            finish_reason: choice
-                .finish_reason
-                .unwrap_or_else(|| "stop".to_string()),
+            finish_reason: choice.finish_reason.unwrap_or_else(|| "stop".to_string()),
         })
     }
 
@@ -235,7 +233,9 @@ impl LlmBackend for OpenAiBackend {
                 message: "Invalid API key or unauthorized".to_string(),
             })
         } else if status == 429 {
-            Err(AgentError::RateLimited { retry_after_secs: 60 })
+            Err(AgentError::RateLimited {
+                retry_after_secs: 60,
+            })
         } else {
             Err(AgentError::ApiError {
                 status,
@@ -278,20 +278,17 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/v1/chat/completions"))
             .and(header("Content-Type", "application/json"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(make_success_response(
-                "Hello from GPT",
-                "gpt-4o",
-            )))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(make_success_response("Hello from GPT", "gpt-4o")),
+            )
             .mount(&server)
             .await;
 
         let backend =
             OpenAiBackend::with_base_url("test-key".into(), "gpt-4o".into(), server.uri());
 
-        let messages = vec![
-            Message::system("Be helpful."),
-            Message::user("Hello!"),
-        ];
+        let messages = vec![Message::system("Be helpful."), Message::user("Hello!")];
 
         let response = backend.complete(messages, 128).await.unwrap();
         assert_eq!(response.content, "Hello from GPT");
@@ -325,7 +322,12 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(err, AgentError::RateLimited { retry_after_secs: 45 }));
+        assert!(matches!(
+            err,
+            AgentError::RateLimited {
+                retry_after_secs: 45
+            }
+        ));
     }
 
     #[tokio::test]

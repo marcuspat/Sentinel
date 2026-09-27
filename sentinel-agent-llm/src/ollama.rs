@@ -147,10 +147,9 @@ impl LlmBackend for OllamaBackend {
             });
         }
 
-        let api_response: OllamaResponse = response
-            .json()
-            .await
-            .map_err(|e| AgentError::InvalidResponse(format!("failed to parse Ollama response: {e}")))?;
+        let api_response: OllamaResponse = response.json().await.map_err(|e| {
+            AgentError::InvalidResponse(format!("failed to parse Ollama response: {e}"))
+        })?;
 
         if !api_response.done {
             warn!("Ollama response marked as not done");
@@ -183,11 +182,7 @@ impl LlmBackend for OllamaBackend {
 
     async fn health_check(&self) -> Result<(), AgentError> {
         // Use the /api/tags endpoint (model list) as a lightweight liveness check.
-        let response = self
-            .client
-            .get(self.tags_url())
-            .send()
-            .await?;
+        let response = self.client.get(self.tags_url()).send().await?;
 
         let status = response.status().as_u16();
         if status == 200 {
@@ -252,10 +247,7 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(path("/api/chat"))
-            .respond_with(
-                ResponseTemplate::new(404)
-                    .set_body_string("model not found"),
-            )
+            .respond_with(ResponseTemplate::new(404).set_body_string("model not found"))
             .mount(&server)
             .await;
 
@@ -309,8 +301,7 @@ mod tests {
 
     #[test]
     fn with_base_url_sets_url() {
-        let backend =
-            OllamaBackend::with_base_url("llama3.2".into(), "http://remote:11434".into());
+        let backend = OllamaBackend::with_base_url("llama3.2".into(), "http://remote:11434".into());
         assert_eq!(backend.chat_url(), "http://remote:11434/api/chat");
     }
 }

@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::sync::Arc;
 use tracing::debug;
 
 use sentinel_core::{
@@ -142,7 +142,12 @@ impl Capability for PackageList {
         let list_args = pm.list_args();
         let out = match self
             .executor
-            .run(pm.name(), &list_args, &ctx.env_overrides, ctx.resource_limits.max_output_bytes)
+            .run(
+                pm.name(),
+                &list_args,
+                &ctx.env_overrides,
+                ctx.resource_limits.max_output_bytes,
+            )
             .await
         {
             Ok(o) => o,
@@ -258,7 +263,12 @@ impl Capability for PackageUpgrade {
             let upgrade_args = pm.upgrade_all_args();
             match self
                 .executor
-                .run(pm.name(), &upgrade_args, &ctx.env_overrides, ctx.resource_limits.max_output_bytes)
+                .run(
+                    pm.name(),
+                    &upgrade_args,
+                    &ctx.env_overrides,
+                    ctx.resource_limits.max_output_bytes,
+                )
                 .await
             {
                 Ok(o) => o,
@@ -276,7 +286,12 @@ impl Capability for PackageUpgrade {
             let upgrade_args = pm.upgrade_pkg_args(&pkg_refs);
             match self
                 .executor
-                .run(pm.name(), &upgrade_args, &ctx.env_overrides, ctx.resource_limits.max_output_bytes)
+                .run(
+                    pm.name(),
+                    &upgrade_args,
+                    &ctx.env_overrides,
+                    ctx.resource_limits.max_output_bytes,
+                )
                 .await
             {
                 Ok(o) => o,
@@ -308,7 +323,11 @@ impl Capability for PackageUpgrade {
         }))
     }
 
-    async fn invoke_inverse(&self, _args: Value, _ctx: &ExecutionContext) -> Option<CapabilityResult> {
+    async fn invoke_inverse(
+        &self,
+        _args: Value,
+        _ctx: &ExecutionContext,
+    ) -> Option<CapabilityResult> {
         Some(CapabilityResult::failure(
             "Automatic rollback of package upgrades is not supported. \
              Use your package manager's downgrade command manually.",
@@ -322,9 +341,9 @@ impl Capability for PackageUpgrade {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sentinel_exec::{CommandExecutorTrait, CommandOutput};
     use std::collections::HashMap;
     use std::sync::Mutex;
-    use sentinel_exec::{CommandExecutorTrait, CommandOutput};
     use uuid::Uuid;
 
     struct DummyExecutor;
@@ -353,7 +372,9 @@ mod tests {
 
     impl MockExecutor {
         fn new() -> Arc<Self> {
-            Arc::new(Self { calls: Mutex::new(Vec::new()) })
+            Arc::new(Self {
+                calls: Mutex::new(Vec::new()),
+            })
         }
     }
 
@@ -366,10 +387,10 @@ mod tests {
             _env: &HashMap<String, String>,
             _max_output_bytes: usize,
         ) -> Result<CommandOutput, sentinel_exec::ExecError> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push((program.to_string(), args.iter().map(|s| s.to_string()).collect()));
+            self.calls.lock().unwrap().push((
+                program.to_string(),
+                args.iter().map(|s| s.to_string()).collect(),
+            ));
 
             let stdout = match program {
                 "which" => "/usr/bin/apt\n",
@@ -409,7 +430,9 @@ mod tests {
         }
 
         let calls = exec.calls.lock().unwrap();
-        assert!(calls.iter().any(|(p, a)| p == "apt" && a == &["list", "--installed"]));
+        assert!(calls
+            .iter()
+            .any(|(p, a)| p == "apt" && a == &["list", "--installed"]));
     }
 
     #[tokio::test]
@@ -438,7 +461,9 @@ mod tests {
         }
 
         let calls = exec.calls.lock().unwrap();
-        assert!(calls.iter().any(|(p, a)| p == "apt" && a == &["upgrade", "-y"]));
+        assert!(calls
+            .iter()
+            .any(|(p, a)| p == "apt" && a == &["upgrade", "-y"]));
     }
 
     #[tokio::test]

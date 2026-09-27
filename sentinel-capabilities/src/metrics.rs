@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::sync::Arc;
 use tracing::debug;
 
 use sentinel_core::{
@@ -24,7 +24,9 @@ impl SystemMetrics {
             manifest: CapabilityManifest {
                 id: "system_metrics".into(),
                 name: "System Metrics".into(),
-                description: "Reads system metrics: load average, memory, swap, and uptime from /proc.".into(),
+                description:
+                    "Reads system metrics: load average, memory, swap, and uptime from /proc."
+                        .into(),
                 kind: CapabilityKind::ReadOnly,
                 risk_tier: RiskTier::Low,
                 resource_impact: ResourceImpact::default(),
@@ -59,11 +61,11 @@ impl SystemMetrics {
             }
             let value: u64 = parts[1].parse().unwrap_or(0);
             match parts[0] {
-                "MemTotal:"     => total_kb = value,
-                "MemFree:"      => free_kb = value,
+                "MemTotal:" => total_kb = value,
+                "MemFree:" => free_kb = value,
                 "MemAvailable:" => available_kb = value,
-                "SwapTotal:"    => swap_total_kb = value,
-                "SwapFree:"     => swap_free_kb = value,
+                "SwapTotal:" => swap_total_kb = value,
+                "SwapFree:" => swap_free_kb = value,
                 _ => {}
             }
         }
@@ -100,9 +102,9 @@ impl Capability for SystemMetrics {
                 .as_array()
                 .ok_or_else(|| CoreError::InvalidArgs("'include' must be an array".into()))?;
             for item in arr {
-                let s = item
-                    .as_str()
-                    .ok_or_else(|| CoreError::InvalidArgs("'include' items must be strings".into()))?;
+                let s = item.as_str().ok_or_else(|| {
+                    CoreError::InvalidArgs("'include' items must be strings".into())
+                })?;
                 if !VALID_METRICS.contains(&s) {
                     return Err(CoreError::InvalidArgs(format!(
                         "'{}' is not a valid metric; valid values: {:?}",
@@ -147,7 +149,12 @@ impl Capability for SystemMetrics {
             debug!("SystemMetrics: reading /proc/meminfo");
             let out = match self
                 .executor
-                .run("cat", &["/proc/meminfo"], &ctx.env_overrides, ctx.resource_limits.max_output_bytes)
+                .run(
+                    "cat",
+                    &["/proc/meminfo"],
+                    &ctx.env_overrides,
+                    ctx.resource_limits.max_output_bytes,
+                )
                 .await
             {
                 Ok(o) => o,
@@ -176,7 +183,12 @@ impl Capability for SystemMetrics {
             debug!("SystemMetrics: running df for disk metrics");
             let out = match self
                 .executor
-                .run("df", &["-h", "--total"], &ctx.env_overrides, ctx.resource_limits.max_output_bytes)
+                .run(
+                    "df",
+                    &["-h", "--total"],
+                    &ctx.env_overrides,
+                    ctx.resource_limits.max_output_bytes,
+                )
                 .await
             {
                 Ok(o) => o,
@@ -215,8 +227,8 @@ impl Capability for SystemMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use sentinel_exec::{CommandExecutorTrait, CommandOutput};
+    use std::collections::HashMap;
 
     struct DummyExecutor;
     #[async_trait::async_trait]
@@ -245,7 +257,9 @@ mod tests {
     #[test]
     fn system_metrics_valid_include() {
         let cap = SystemMetrics::new(make_executor());
-        assert!(cap.validate_args(&json!({ "include": ["cpu", "memory"] })).is_ok());
+        assert!(cap
+            .validate_args(&json!({ "include": ["cpu", "memory"] }))
+            .is_ok());
     }
 
     #[test]
@@ -259,7 +273,9 @@ mod tests {
     #[test]
     fn system_metrics_invalid_metric() {
         let cap = SystemMetrics::new(make_executor());
-        assert!(cap.validate_args(&json!({ "include": ["network"] })).is_err());
+        assert!(cap
+            .validate_args(&json!({ "include": ["network"] }))
+            .is_err());
     }
 
     #[test]

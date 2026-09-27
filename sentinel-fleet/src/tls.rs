@@ -31,8 +31,8 @@ impl FleetTls {
         dn.push(rcgen::DnType::CommonName, common_name);
         params.distinguished_name = dn;
 
-        let cert = Certificate::from_params(params)
-            .map_err(|e| FleetError::Certificate(e.to_string()))?;
+        let cert =
+            Certificate::from_params(params).map_err(|e| FleetError::Certificate(e.to_string()))?;
 
         let pem = cert
             .serialize_pem()
@@ -71,8 +71,8 @@ impl FleetTls {
         dn.push(rcgen::DnType::CommonName, node_id);
         params.distinguished_name = dn;
 
-        let cert = Certificate::from_params(params)
-            .map_err(|e| FleetError::Certificate(e.to_string()))?;
+        let cert =
+            Certificate::from_params(params).map_err(|e| FleetError::Certificate(e.to_string()))?;
 
         let cert_pem = cert
             .serialize_pem_with_signer(ca_cert)
@@ -112,7 +112,9 @@ impl FleetTls {
         key_pem: &str,
         ca_cert_pem: &str,
     ) -> Result<Arc<rustls::ServerConfig>, FleetError> {
-        rustls::crypto::ring::default_provider().install_default().ok();
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .ok();
         let cert_der = Self::pem_to_der(cert_pem)?;
         let key_der = Self::pem_key_to_der(key_pem)?;
         let ca_der = Self::pem_to_der(ca_cert_pem)?;
@@ -149,7 +151,9 @@ impl FleetTls {
         key_pem: &str,
         pinned_fingerprint: &str,
     ) -> Result<Arc<rustls::ClientConfig>, FleetError> {
-        rustls::crypto::ring::default_provider().install_default().ok();
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .ok();
         let cert_der = Self::pem_to_der(cert_pem)?;
         let key_der = Self::pem_key_to_der(key_pem)?;
 
@@ -370,11 +374,9 @@ mod tests {
     #[test]
     fn server_config_builds_without_error() {
         let (ca, ca_pem) = FleetTls::generate_ca("server-ca").unwrap();
-        let (cert_pem, key_pem) =
-            FleetTls::generate_node_cert(&ca, "server-node", vec![]).unwrap();
+        let (cert_pem, key_pem) = FleetTls::generate_node_cert(&ca, "server-node", vec![]).unwrap();
 
-        FleetTls::server_config(&cert_pem, &key_pem, &ca_pem)
-            .expect("server_config must build");
+        FleetTls::server_config(&cert_pem, &key_pem, &ca_pem).expect("server_config must build");
     }
 
     // ── Client config ─────────────────────────────────────────────────────────
@@ -397,7 +399,6 @@ mod tests {
             .collect::<Vec<_>>()
             .join(":");
 
-        FleetTls::client_config(&client_pem, &client_key, &fp)
-            .expect("client_config must build");
+        FleetTls::client_config(&client_pem, &client_key, &fp).expect("client_config must build");
     }
 }

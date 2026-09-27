@@ -132,8 +132,8 @@ impl AuditEvent {
         };
 
         // Canonical JSON (keys in insertion order via serde_json).
-        let json = serde_json::to_string(&partial)
-            .expect("AuditEventForHash is always serialisable");
+        let json =
+            serde_json::to_string(&partial).expect("AuditEventForHash is always serialisable");
 
         let mut hasher = Sha256::new();
         // Prepend raw bytes of the hex prev_hash string (not decoded bytes —

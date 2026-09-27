@@ -32,7 +32,11 @@ use sentinel_tui::{
 };
 
 #[derive(Parser)]
-#[command(name = "sentinel", version, about = "Agentic system administration tool")]
+#[command(
+    name = "sentinel",
+    version,
+    about = "Agentic system administration tool"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -80,9 +84,7 @@ enum Commands {
     /// Show current policy rules
     Policy,
     /// Verify an audit log file
-    VerifyAudit {
-        path: std::path::PathBuf,
-    },
+    VerifyAudit { path: std::path::PathBuf },
     /// Run a capability across multiple hosts in parallel over SSH
     Fleet {
         /// Operational goal / label for this fleet run
@@ -113,9 +115,7 @@ enum Commands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    fmt()
-        .with_env_filter(EnvFilter::new(&cli.log_level))
-        .init();
+    fmt().with_env_filter(EnvFilter::new(&cli.log_level)).init();
 
     match cli.command.unwrap_or(Commands::Tui {
         host: "localhost".into(),
@@ -316,7 +316,10 @@ async fn run_agent(
     // 4. Policy + audit log (persisted to a per-session JSONL file).
     let policy = Arc::new(default_policy());
     let audit_path = std::path::PathBuf::from(format!("sentinel-audit-{session_id}.jsonl"));
-    let audit = Arc::new(Mutex::new(AuditLog::new(session_id, Some(audit_path.clone()))));
+    let audit = Arc::new(Mutex::new(AuditLog::new(
+        session_id,
+        Some(audit_path.clone()),
+    )));
 
     // 5. Reasoning loop wired with the concrete capabilities.
     let agent = ReasoningLoop::new(
@@ -461,7 +464,10 @@ async fn run_fleet(
     }
 
     println!();
-    println!("Fleet summary: {ok} succeeded, {failed} failed across {} host(s).", config.len());
+    println!(
+        "Fleet summary: {ok} succeeded, {failed} failed across {} host(s).",
+        config.len()
+    );
     Ok(())
 }
 
@@ -491,7 +497,10 @@ fn show_policy() {
         rules.len()
     );
     println!("{:-<78}", "");
-    println!("  {:<5} {:<33} {:<16} Conditions", "Prio", "Rule ID", "Effect");
+    println!(
+        "  {:<5} {:<33} {:<16} Conditions",
+        "Prio", "Rule ID", "Effect"
+    );
     println!("{:-<78}", "");
 
     for rule in rules {

@@ -163,7 +163,10 @@ impl Session {
 
         if allowed {
             // Stamp completion time when entering a terminal phase.
-            if matches!(phase, SessionPhase::Completed | SessionPhase::Aborted { .. }) {
+            if matches!(
+                phase,
+                SessionPhase::Completed | SessionPhase::Aborted { .. }
+            ) {
                 self.completed_at = Some(chrono::Utc::now());
             }
             self.phase = phase;
@@ -178,8 +181,7 @@ impl Session {
 
     /// Take a checkpoint of the current session state.
     pub fn checkpoint(&self) -> SessionCheckpoint {
-        let snapshot = serde_json::to_value(self)
-            .unwrap_or(serde_json::Value::Null);
+        let snapshot = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
         SessionCheckpoint {
             checkpoint_id: uuid::Uuid::new_v4(),
             phase: self.phase.clone(),
@@ -236,7 +238,9 @@ mod tests {
             SessionPhase::AwaitingApproval,
             SessionPhase::Executing,
             SessionPhase::Completed,
-            SessionPhase::Aborted { reason: "test".into() },
+            SessionPhase::Aborted {
+                reason: "test".into(),
+            },
         ];
         for phase in &phases {
             let json = serde_json::to_string(phase).unwrap();

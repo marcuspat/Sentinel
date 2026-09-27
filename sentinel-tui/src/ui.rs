@@ -71,8 +71,7 @@ fn render_approval_modal(frame: &mut Frame, area: Rect, step: &PlanStep) {
     // Clear whatever is underneath so the modal stands alone.
     frame.render_widget(Clear, popup);
 
-    let args = serde_json::to_string_pretty(&step.args)
-        .unwrap_or_else(|_| step.args.to_string());
+    let args = serde_json::to_string_pretty(&step.args).unwrap_or_else(|_| step.args.to_string());
 
     let mut lines = vec![
         Line::from(Span::styled(
@@ -84,7 +83,9 @@ fn render_approval_modal(frame: &mut Frame, area: Rect, step: &PlanStep) {
             Span::raw("Capability : "),
             Span::styled(
                 step.capability_id.clone(),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(vec![
@@ -112,7 +113,9 @@ fn render_approval_modal(frame: &mut Frame, area: Rect, step: &PlanStep) {
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "Approve?   [y] yes      [n / Esc] abort",
-        Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
     )));
 
     let modal = Paragraph::new(lines)
@@ -151,10 +154,7 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_tabs(frame: &mut Frame, area: Rect, app: &App) {
-    let tab_titles: Vec<Line> = Tab::ALL
-        .iter()
-        .map(|t| Line::from(t.title()))
-        .collect();
+    let tab_titles: Vec<Line> = Tab::ALL.iter().map(|t| Line::from(t.title())).collect();
 
     let selected = app.current_tab.index();
 
@@ -189,14 +189,12 @@ fn render_goal_tab(frame: &mut Frame, area: Rect, app: &App) {
         Style::default().fg(Color::White)
     };
 
-    let input = Paragraph::new(display)
-        .style(input_style)
-        .block(
-            Block::default()
-                .title("Operational Goal")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        );
+    let input = Paragraph::new(display).style(input_style).block(
+        Block::default()
+            .title("Operational Goal")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
     frame.render_widget(input, chunks[0]);
 
     // Help text.
@@ -215,7 +213,11 @@ fn render_investigation_tab(frame: &mut Frame, area: Rect, app: &App) {
             let p = Paragraph::new(
                 "No active session.\n\nGo to the Goal tab and enter a goal to start.",
             )
-            .block(Block::default().title("Investigation").borders(Borders::ALL))
+            .block(
+                Block::default()
+                    .title("Investigation")
+                    .borders(Borders::ALL),
+            )
             .style(Style::default().fg(Color::DarkGray));
             frame.render_widget(p, area);
         }
@@ -230,10 +232,7 @@ fn render_investigation_tab(frame: &mut Frame, area: Rect, app: &App) {
                             format!("[{}] ", e.timestamp.format("%H:%M:%S")),
                             Style::default().fg(Color::DarkGray),
                         ),
-                        Span::styled(
-                            format!("{} ", e.level),
-                            level_style,
-                        ),
+                        Span::styled(format!("{} ", e.level), level_style),
                         Span::raw(&e.message),
                     ]);
                     ListItem::new(line)
@@ -296,9 +295,16 @@ fn render_plan_tab(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(gauge, chunks[0]);
 
     // Step table.
-    let header_cells = ["#", "Description", "Capability", "Risk", "Status", "Approved"]
-        .iter()
-        .map(|h| Cell::from(*h).style(Style::default().fg(Color::Yellow)));
+    let header_cells = [
+        "#",
+        "Description",
+        "Capability",
+        "Risk",
+        "Status",
+        "Approved",
+    ]
+    .iter()
+    .map(|h| Cell::from(*h).style(Style::default().fg(Color::Yellow)));
     let header = Row::new(header_cells).height(1);
 
     let rows: Vec<Row> = app
@@ -388,7 +394,10 @@ fn render_execution_tab(frame: &mut Frame, area: Rect, app: &App) {
 
     let list = List::new(items).block(
         Block::default()
-            .title(format!("Execution  [{}/{} steps complete]", completed, total))
+            .title(format!(
+                "Execution  [{}/{} steps complete]",
+                completed, total
+            ))
             .borders(Borders::ALL),
     );
     frame.render_widget(list, area);
@@ -410,7 +419,8 @@ fn render_audit_tab(frame: &mut Frame, area: Rect, app: &App) {
 
 fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     let status = app.status_message.as_deref().unwrap_or("Ready");
-    let shortcuts = "[Tab] tab  [q] quit  [a] approve-all  [s] approve-step  [r] reject  [j/k] scroll";
+    let shortcuts =
+        "[Tab] tab  [q] quit  [a] approve-all  [s] approve-step  [r] reject  [j/k] scroll";
     let content = format!(" {}  |  {}", status, shortcuts);
 
     let paragraph = Paragraph::new(content)
@@ -458,9 +468,7 @@ fn step_status_style(status: &StepStatus) -> Style {
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD),
         StepStatus::Succeeded => Style::default().fg(Color::Green),
-        StepStatus::Failed { .. } => Style::default()
-            .fg(Color::Red)
-            .add_modifier(Modifier::BOLD),
+        StepStatus::Failed { .. } => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         StepStatus::Skipped => Style::default().fg(Color::Yellow),
         StepStatus::RolledBack => Style::default().fg(Color::Magenta),
     }

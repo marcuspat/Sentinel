@@ -7,7 +7,10 @@ pub enum PolicyError {
 
     /// A resource guard blocked this request.
     #[error("Resource guard blocked: {guard_name} protects {resource}")]
-    ResourceGuardBlocked { guard_name: String, resource: String },
+    ResourceGuardBlocked {
+        guard_name: String,
+        resource: String,
+    },
 
     /// No allow rule matched and the engine is deny-by-default.
     #[error("Deny-by-default: no allow rule matched")]

@@ -54,25 +54,19 @@ pub fn apply_sandbox(cmd: &mut Command, config: &SandboxConfig) {
         cmd.pre_exec(move || {
             use nix::sys::resource::{setrlimit, Resource};
 
-            let map_err = |e: nix::errno::Errno| {
-                std::io::Error::other(e.to_string())
-            };
+            let map_err = |e: nix::errno::Errno| std::io::Error::other(e.to_string());
 
             // Limit open file descriptors to 256.
             setrlimit(Resource::RLIMIT_NOFILE, 256, 256).map_err(map_err)?;
 
             // Disable core dumps.
             setrlimit(Resource::RLIMIT_CORE, 0, 0)
-                .map_err(|e: nix::errno::Errno| {
-                    std::io::Error::other(e.to_string())
-                })?;
+                .map_err(|e: nix::errno::Errno| std::io::Error::other(e.to_string()))?;
 
             // Optionally restrict fork/thread creation.
             if deny_new_processes {
                 setrlimit(Resource::RLIMIT_NPROC, 64, 64)
-                    .map_err(|e: nix::errno::Errno| {
-                        std::io::Error::other(e.to_string())
-                    })?;
+                    .map_err(|e: nix::errno::Errno| std::io::Error::other(e.to_string()))?;
             }
 
             Ok(())

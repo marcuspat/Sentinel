@@ -244,7 +244,9 @@ impl LlmBackend for AnthropicBackend {
                 message: "Invalid API key or unauthorized".to_string(),
             })
         } else if status == 429 {
-            Err(AgentError::RateLimited { retry_after_secs: 60 })
+            Err(AgentError::RateLimited {
+                retry_after_secs: 60,
+            })
         } else {
             Err(AgentError::ApiError {
                 status,
@@ -281,10 +283,12 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/v1/messages"))
             .and(header("anthropic-version", "2023-06-01"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(make_success_response(
-                "Hello from Claude",
-                "claude-3-5-sonnet-20241022",
-            )))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(make_success_response(
+                    "Hello from Claude",
+                    "claude-3-5-sonnet-20241022",
+                )),
+            )
             .mount(&server)
             .await;
 
@@ -294,10 +298,7 @@ mod tests {
             server.uri(),
         );
 
-        let messages = vec![
-            Message::system("You are helpful."),
-            Message::user("Hello!"),
-        ];
+        let messages = vec![Message::system("You are helpful."), Message::user("Hello!")];
 
         let response = backend.complete(messages, 256).await.unwrap();
         assert_eq!(response.content, "Hello from Claude");
@@ -334,7 +335,12 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(err, AgentError::RateLimited { retry_after_secs: 30 }));
+        assert!(matches!(
+            err,
+            AgentError::RateLimited {
+                retry_after_secs: 30
+            }
+        ));
     }
 
     #[tokio::test]
@@ -396,10 +402,10 @@ mod tests {
         // Capture the request body to verify system message handling.
         Mock::given(method("POST"))
             .and(path("/v1/messages"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(make_success_response(
-                "ok",
-                "claude-3-5-sonnet-20241022",
-            )))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(make_success_response("ok", "claude-3-5-sonnet-20241022")),
+            )
             .mount(&server)
             .await;
 

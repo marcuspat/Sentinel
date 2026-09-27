@@ -8,8 +8,8 @@
 //!
 //! [`PolicyDecision`]: crate::evaluator::PolicyDecision
 
-use serde::{Deserialize, Serialize};
 use sentinel_core::CapabilityKind;
+use serde::{Deserialize, Serialize};
 
 use crate::evaluator::PolicyRequest;
 use crate::rules::glob_match;
@@ -60,7 +60,10 @@ impl ResourceGuard {
         if let Some(path) = req.args.get("path").and_then(|v| v.as_str()) {
             for pattern in &self.protected_paths {
                 if path_matches(pattern, path) {
-                    return Some(format!("path '{}' is protected by guard '{}'", path, self.name));
+                    return Some(format!(
+                        "path '{}' is protected by guard '{}'",
+                        path, self.name
+                    ));
                 }
             }
         }
@@ -109,12 +112,7 @@ pub fn default_resource_guards() -> Vec<ResourceGuard> {
         ResourceGuard {
             id: "system-paths".into(),
             name: "System Paths Guard".into(),
-            protected_paths: vec![
-                "/etc".into(),
-                "/boot".into(),
-                "/sys".into(),
-                "/proc".into(),
-            ],
+            protected_paths: vec!["/etc".into(), "/boot".into(), "/sys".into(), "/proc".into()],
             protected_services: vec![],
             block_mutating: true,
             allow_read: true,
@@ -123,11 +121,7 @@ pub fn default_resource_guards() -> Vec<ResourceGuard> {
             id: "critical-services".into(),
             name: "Critical Services Guard".into(),
             protected_paths: vec![],
-            protected_services: vec![
-                "sshd".into(),
-                "systemd".into(),
-                "docker".into(),
-            ],
+            protected_services: vec!["sshd".into(), "systemd".into(), "docker".into()],
             block_mutating: true,
             allow_read: true,
         },

@@ -531,7 +531,9 @@ mod tests {
             _args: serde_json::Value,
             _ctx: &ExecutionContext,
         ) -> Option<CapabilityResult> {
-            Some(CapabilityResult::success(serde_json::json!({"undone": true})))
+            Some(CapabilityResult::success(
+                serde_json::json!({"undone": true}),
+            ))
         }
 
         fn validate_args(&self, _args: &serde_json::Value) -> Result<(), CoreError> {
@@ -585,7 +587,9 @@ mod tests {
     #[test]
     fn noop_capability_validate_args_err() {
         let cap = NoopCapability::new();
-        let err = cap.validate_args(&serde_json::json!("not an object")).unwrap_err();
+        let err = cap
+            .validate_args(&serde_json::json!("not an object"))
+            .unwrap_err();
         assert!(matches!(err, CoreError::InvalidArgs(_)));
     }
 

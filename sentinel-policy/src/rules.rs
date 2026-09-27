@@ -4,8 +4,8 @@
 //! Rules are sorted by ascending priority; the *first* matching rule wins.
 
 use chrono::{Utc, Weekday};
-use serde::{Deserialize, Serialize};
 use sentinel_core::{CapabilityKind, RiskTier};
+use serde::{Deserialize, Serialize};
 
 use crate::evaluator::PolicyRequest;
 
@@ -104,8 +104,7 @@ impl RuleCondition {
                     // Wraps midnight, e.g. 22–06
                     hour >= *start_hour || hour < *end_hour
                 };
-                let day_ok = days.is_empty()
-                    || days.iter().any(|d| weekday_name(d) == weekday);
+                let day_ok = days.is_empty() || days.iter().any(|d| weekday_name(d) == weekday);
                 hour_ok && day_ok
             }
 
@@ -171,8 +170,7 @@ fn glob_match_chars(p: &[char], t: &[char]) -> bool {
         (None, _) => false,
         (Some('*'), _) => {
             // '*' can match zero characters or advance through `t`
-            glob_match_chars(&p[1..], t)
-                || (!t.is_empty() && glob_match_chars(p, &t[1..]))
+            glob_match_chars(&p[1..], t) || (!t.is_empty() && glob_match_chars(p, &t[1..]))
         }
         (_, None) => false,
         (Some('?'), _) => glob_match_chars(&p[1..], &t[1..]),
@@ -290,7 +288,9 @@ mod tests {
         let req = make_request("op", RiskTier::High, "h");
         let rule_high = simple_rule(
             RuleEffect::Deny,
-            vec![RuleCondition::RiskTierAtLeast { tier: RiskTier::High }],
+            vec![RuleCondition::RiskTierAtLeast {
+                tier: RiskTier::High,
+            }],
         );
         let rule_critical = simple_rule(
             RuleEffect::Deny,
@@ -313,7 +313,9 @@ mod tests {
         );
         let rule_low = simple_rule(
             RuleEffect::Allow,
-            vec![RuleCondition::RiskTierExactly { tier: RiskTier::Low }],
+            vec![RuleCondition::RiskTierExactly {
+                tier: RiskTier::Low,
+            }],
         );
         assert!(rule_medium.matches(&req));
         assert!(!rule_low.matches(&req));

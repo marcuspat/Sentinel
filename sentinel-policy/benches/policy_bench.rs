@@ -1,15 +1,11 @@
+use chrono::Utc;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use sentinel_core::{CapabilityKind, RiskTier};
 use sentinel_policy::{default_policy, PolicyRequest};
 use serde_json::json;
 use uuid::Uuid;
-use chrono::Utc;
 
-fn make_request(
-    cap_id: &str,
-    kind: CapabilityKind,
-    risk: RiskTier,
-) -> PolicyRequest {
+fn make_request(cap_id: &str, kind: CapabilityKind, risk: RiskTier) -> PolicyRequest {
     PolicyRequest {
         session_id: Uuid::new_v4(),
         capability_id: cap_id.to_string(),
@@ -88,10 +84,22 @@ fn bench_policy_evaluate_all_tiers(c: &mut Criterion) {
 
     let cases = [
         ("ReadOnly/Low", CapabilityKind::ReadOnly, RiskTier::Low),
-        ("ReadOnly/Medium", CapabilityKind::ReadOnly, RiskTier::Medium),
-        ("Mutating/Medium", CapabilityKind::Mutating, RiskTier::Medium),
+        (
+            "ReadOnly/Medium",
+            CapabilityKind::ReadOnly,
+            RiskTier::Medium,
+        ),
+        (
+            "Mutating/Medium",
+            CapabilityKind::Mutating,
+            RiskTier::Medium,
+        ),
         ("Mutating/High", CapabilityKind::Mutating, RiskTier::High),
-        ("Mutating/Critical", CapabilityKind::Mutating, RiskTier::Critical),
+        (
+            "Mutating/Critical",
+            CapabilityKind::Mutating,
+            RiskTier::Critical,
+        ),
     ];
 
     for (label, kind, risk) in cases {

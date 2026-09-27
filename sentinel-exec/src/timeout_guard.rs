@@ -110,9 +110,7 @@ mod tests {
 
     #[tokio::test]
     async fn completes_before_timeout() {
-        let child = Command::new("true")
-            .spawn()
-            .expect("spawn true");
+        let child = Command::new("true").spawn().expect("spawn true");
         let guard = TimeoutGuard::new(child, 5_000);
         let (status, timed_out) = guard.wait_with_timeout().await.expect("wait failed");
         assert!(status.success());

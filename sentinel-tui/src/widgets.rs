@@ -92,10 +92,7 @@ impl<'a> Widget for PlanStepListWidget<'a> {
                 let approved_mark = if sv.approved { "✓ " } else { "  " };
 
                 let line = Line::from(vec![
-                    Span::styled(
-                        approved_mark,
-                        Style::default().fg(Color::Green),
-                    ),
+                    Span::styled(approved_mark, Style::default().fg(Color::Green)),
                     Span::styled(
                         format!("{} ", status_icon),
                         step_icon_style(&sv.step.status),
@@ -145,11 +142,7 @@ impl Widget for ObservationListWidget {
     fn render(self, area: Rect, buf: &mut ratatui::buffer::Buffer) {
         let content = self.entries.join("\n");
         let paragraph = Paragraph::new(content)
-            .block(
-                Block::default()
-                    .title("Observations")
-                    .borders(Borders::ALL),
-            )
+            .block(Block::default().title("Observations").borders(Borders::ALL))
             .scroll((self.scroll, 0))
             .style(Style::default().fg(Color::Gray));
         paragraph.render(area, buf);
@@ -171,11 +164,8 @@ pub fn render_plan_step_list(
     selected: usize,
 ) {
     frame.render_widget(
-        PlanStepListWidget::new(steps, selected).block(
-            Block::default()
-                .title("Plan Steps")
-                .borders(Borders::ALL),
-        ),
+        PlanStepListWidget::new(steps, selected)
+            .block(Block::default().title("Plan Steps").borders(Borders::ALL)),
         area,
     );
 }

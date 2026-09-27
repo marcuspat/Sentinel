@@ -22,10 +22,7 @@ pub enum AppEvent {
 ///
 /// Returns `Ok(())` in all normal cases.  Returns `Err` only on I/O errors
 /// that prevent the TUI from continuing.
-pub async fn handle_events(
-    app: &mut App,
-    event: AppEvent,
-) -> Result<(), anyhow::Error> {
+pub async fn handle_events(app: &mut App, event: AppEvent) -> Result<(), anyhow::Error> {
     // Surface any pending approval request from the agent before handling the
     // event, so a freshly-arrived request blocks input on this same pass.
     app.poll_approval();
@@ -92,18 +89,14 @@ fn handle_key(app: &mut App, key: KeyEvent) {
         KeyCode::BackTab => app.prev_tab(),
 
         // ââ Scrolling âââââââââââââââââââââââââââââââââââââââââââââââââââââ
-        KeyCode::Down | KeyCode::Char('j') => {
-            match app.current_tab {
-                Tab::Plan => app.plan_scroll_down(),
-                _ => app.scroll_log_down(),
-            }
-        }
-        KeyCode::Up | KeyCode::Char('k') => {
-            match app.current_tab {
-                Tab::Plan => app.plan_scroll_up(),
-                _ => app.scroll_log_up(),
-            }
-        }
+        KeyCode::Down | KeyCode::Char('j') => match app.current_tab {
+            Tab::Plan => app.plan_scroll_down(),
+            _ => app.scroll_log_down(),
+        },
+        KeyCode::Up | KeyCode::Char('k') => match app.current_tab {
+            Tab::Plan => app.plan_scroll_up(),
+            _ => app.scroll_log_up(),
+        },
 
         // ââ Plan approval actions âââââââââââââââââââââââââââââââââââââââââ
         KeyCode::Char('a') if app.current_tab == Tab::Plan => {

@@ -12,8 +12,8 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use serde_json::Value;
 use sentinel_core::{CapabilityKind, RiskTier};
+use serde_json::Value;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
@@ -77,10 +77,7 @@ pub struct PolicyDecision {
 impl PolicyDecision {
     /// Returns `true` when the capability is permitted to run.
     pub fn is_allowed(&self) -> bool {
-        matches!(
-            self.effect,
-            PolicyEffect::Allowed | PolicyEffect::AuditOnly
-        )
+        matches!(self.effect, PolicyEffect::Allowed | PolicyEffect::AuditOnly)
     }
 }
 
@@ -241,10 +238,7 @@ impl PolicyEvaluator {
                     ),
                     RuleEffect::Deny => (
                         PolicyEffect::Denied {
-                            reason: format!(
-                                "Denied by rule '{}': {}",
-                                rule.id, rule.description
-                            ),
+                            reason: format!("Denied by rule '{}': {}", rule.id, rule.description),
                         },
                         format!("Denied by rule '{}': {}", rule.id, rule.description),
                     ),
@@ -257,10 +251,7 @@ impl PolicyEvaluator {
                     ),
                     RuleEffect::AuditOnly => (
                         PolicyEffect::AuditOnly,
-                        format!(
-                            "Audit-only by rule '{}': {}",
-                            rule.id, rule.description
-                        ),
+                        format!("Audit-only by rule '{}': {}", rule.id, rule.description),
                     ),
                 };
 
@@ -320,7 +311,9 @@ mod tests {
             name: "Allow Low Risk".into(),
             description: "Allow all low-risk capabilities".into(),
             effect: RuleEffect::Allow,
-            conditions: vec![RuleCondition::RiskTierExactly { tier: RiskTier::Low }],
+            conditions: vec![RuleCondition::RiskTierExactly {
+                tier: RiskTier::Low,
+            }],
             priority: 100,
             enabled: true,
         }
@@ -386,12 +379,13 @@ mod tests {
             name: "Deny Low (prio 5)".into(),
             description: "Deny low risk with high priority".into(),
             effect: RuleEffect::Deny,
-            conditions: vec![RuleCondition::RiskTierExactly { tier: RiskTier::Low }],
+            conditions: vec![RuleCondition::RiskTierExactly {
+                tier: RiskTier::Low,
+            }],
             priority: 5,
             enabled: true,
         };
-        let evaluator =
-            PolicyEvaluator::new(vec![allow_all_low_rule(), deny_low], ks, vec![]);
+        let evaluator = PolicyEvaluator::new(vec![allow_all_low_rule(), deny_low], ks, vec![]);
         let req = make_request("disk_usage", CapabilityKind::ReadOnly, RiskTier::Low);
         let decision = evaluator.evaluate(req);
         // deny-low-prio5 (priority=5) should win over allow-low (priority=100)
@@ -449,7 +443,9 @@ mod tests {
             name: "Audit Low".into(),
             description: "Audit-only for low risk".into(),
             effect: RuleEffect::AuditOnly,
-            conditions: vec![RuleCondition::RiskTierExactly { tier: RiskTier::Low }],
+            conditions: vec![RuleCondition::RiskTierExactly {
+                tier: RiskTier::Low,
+            }],
             priority: 100,
             enabled: true,
         };

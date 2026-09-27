@@ -4,7 +4,6 @@ use std::sync::Arc;
 use sentinel_core::{Capability, CapabilityManifest};
 use sentinel_exec::CommandExecutorTrait;
 
-
 /// A registry that maps capability IDs to capability implementations.
 pub struct CapabilityRegistry {
     capabilities: HashMap<String, Box<dyn Capability>>,
@@ -60,9 +59,9 @@ impl Default for CapabilityRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-    use sentinel_exec::{CommandExecutorTrait, CommandOutput};
     use crate::filesystem::DiskUsage;
+    use sentinel_exec::{CommandExecutorTrait, CommandOutput};
+    use std::collections::HashMap;
 
     struct DummyExecutor;
     #[async_trait::async_trait]
@@ -119,11 +118,7 @@ mod tests {
             "system_metrics",
         ];
         for id in &expected {
-            assert!(
-                ids.contains(&id.to_string()),
-                "Missing capability: {}",
-                id
-            );
+            assert!(ids.contains(&id.to_string()), "Missing capability: {}", id);
         }
         assert_eq!(ids.len(), expected.len());
     }
