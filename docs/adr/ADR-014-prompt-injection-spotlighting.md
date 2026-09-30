@@ -56,7 +56,8 @@ window.
    past the truncation point that the model never saw; recording the
    attempt is the point of a tripwire — in every phase: `investigate()`,
    `plan()` (including caller-supplied observations), and `execute_plan()`
-   results. Hits emit a `warn!` and a new hash-chained
+   results. Observations `investigate()` already audited carry a flag so
+   `plan()` does not double-count a hit in the standard path. Hits emit a `warn!` and a new hash-chained
    `SuspectedPromptInjection` audit event. It's a detector, not a filter:
    data is still passed (fenced) so the model sees real system state. The
    pattern list is deliberately high-precision — generic phrases that

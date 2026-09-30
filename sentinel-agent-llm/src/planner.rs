@@ -32,6 +32,13 @@ pub struct Observation {
     pub result: CapabilityResult,
     /// Wall-clock time when the observation was recorded.
     pub timestamp: chrono::DateTime<chrono::Utc>,
+    /// Whether the prompt-injection tripwire already audited this
+    /// observation. Set by `investigate()` so `plan()` can skip
+    /// already-audited observations instead of double-counting hits in
+    /// the hash-chained audit log. Observations supplied by callers that
+    /// never ran `investigate()` start `false` and are audited by `plan()`.
+    #[serde(default)]
+    pub injection_audited: bool,
 }
 
 impl Observation {
@@ -47,6 +54,7 @@ impl Observation {
             args,
             result,
             timestamp: chrono::Utc::now(),
+            injection_audited: false,
         }
     }
 }

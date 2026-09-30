@@ -318,6 +318,33 @@ mod tests {
     use super::*;
     use sentinel_core::{CapabilityKind, CapabilityManifest, RiskTier};
 
+    #[test]
+    fn budgets_pin_planning_4kb_and_investigation_2kb() {
+        // The two per-observation byte budgets are intentionally different:
+        // the investigation turn is rebuilt every round (tighter budget),
+        // the planning prompt is built once (looser budget). This test pins
+        // both values through the rendered prompts, not just the constants.
+        let payload = "x".repeat(5_000);
+        let obs = Observation::new(
+            "disk_usage",
+            serde_json::json!({}),
+            sentinel_core::CapabilityResult::success(serde_json::json!({ "blob": payload })),
+        );
+
+        let planning =
+            PromptBuilder::planning_user_with_observations("goal", std::slice::from_ref(&obs));
+        assert!(
+            planning.contains("truncated by Sentinel: 4000 of "),
+            "planning prompt must cap observations at the 4 KB budget"
+        );
+
+        let turn = PromptBuilder::investigation_turn("goal", &[obs]);
+        assert!(
+            turn.contains("truncated by Sentinel: 2000 of "),
+            "investigation turn must cap observations at the 2 KB budget"
+        );
+    }
+
     fn make_manifest(
         id: &str,
         risk: RiskTier,
@@ -390,6 +417,7 @@ mod tests {
             args: serde_json::json!({"path": "/"}),
             result: CapabilityResult::success(serde_json::json!({"used": "85%"})),
             timestamp: chrono::Utc::now(),
+            injection_audited: false,
         };
 
         let prompt = PromptBuilder::planning_user_with_observations("Fix disk", &[obs]);
@@ -415,6 +443,7 @@ mod tests {
             args: serde_json::json!({}),
             result: CapabilityResult::success(serde_json::json!({"cpu": "95%"})),
             timestamp: chrono::Utc::now(),
+            injection_audited: false,
         };
 
         let prompt = PromptBuilder::investigation_turn("Fix CPU", &[obs]);
