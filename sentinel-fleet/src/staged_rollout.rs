@@ -347,6 +347,9 @@ mod tests {
         let back: StagedRollout = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back.name, r.name);
         assert_eq!(back.stages.len(), 1);
-        assert!(matches!(back.status, RolloutStatus::InProgress { stage: 0 }));
+        assert!(matches!(
+            back.status,
+            RolloutStatus::InProgress { stage: 0 }
+        ));
     }
 }

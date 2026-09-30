@@ -80,6 +80,13 @@ pub enum AuditEventType {
         command_id: Uuid,
         host_count: usize,
     },
+    /// Capability output matched one or more prompt-injection heuristics.
+    /// The data is still passed to the LLM (spotlighted), but the event is
+    /// recorded so operators can see an attempted injection in the audit trail.
+    SuspectedPromptInjection {
+        capability_id: String,
+        patterns: Vec<String>,
+    },
     /// An MCP client (e.g. a coding agent) invoked a Sentinel tool over the
     /// `sentinel serve --mcp` gate.  Recorded *before* the tool runs so that
     /// every call — including rejected ones — lands in the chain.
@@ -139,8 +146,8 @@ impl AuditEvent {
         };
 
         // Canonical JSON (keys in insertion order via serde_json).
-        let json = serde_json::to_string(&partial)
-            .expect("AuditEventForHash is always serialisable");
+        let json =
+            serde_json::to_string(&partial).expect("AuditEventForHash is always serialisable");
 
         let mut hasher = Sha256::new();
         // Prepend raw bytes of the hex prev_hash string (not decoded bytes —

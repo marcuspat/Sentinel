@@ -32,6 +32,13 @@ pub struct Observation {
     pub result: CapabilityResult,
     /// Wall-clock time when the observation was recorded.
     pub timestamp: chrono::DateTime<chrono::Utc>,
+    /// Whether the prompt-injection tripwire already audited this
+    /// observation. Set by `investigate()` so `plan()` can skip
+    /// already-audited observations instead of double-counting hits in
+    /// the hash-chained audit log. Observations supplied by callers that
+    /// never ran `investigate()` start `false` and are audited by `plan()`.
+    #[serde(default)]
+    pub injection_audited: bool,
 }
 
 impl Observation {
@@ -47,6 +54,7 @@ impl Observation {
             args,
             result,
             timestamp: chrono::Utc::now(),
+            injection_audited: false,
         }
     }
 }
@@ -170,7 +178,9 @@ impl CapabilityRequestParser {
                     .and_then(|v| v.as_str())
                     .unwrap_or("Investigation complete")
                     .to_string();
-                return Ok(InvestigationAction::Done(InvestigationComplete { reasoning }));
+                return Ok(InvestigationAction::Done(InvestigationComplete {
+                    reasoning,
+                }));
             }
         }
 
@@ -185,7 +195,11 @@ impl CapabilityRequestParser {
             })?
             .to_string();
 
-        if capability_id.is_empty() || !capability_id.chars().all(|c| c.is_alphanumeric() || matches!(c, '.' | '_' | '-')) {
+        if capability_id.is_empty()
+            || !capability_id
+                .chars()
+                .all(|c| c.is_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        {
             return Err(AgentError::InvalidResponse(
                 "capability_id contains invalid characters".to_string(),
             ));
@@ -247,14 +261,15 @@ impl PlanParser {
             .unwrap_or("No rationale provided")
             .to_string();
 
-        let steps_value = value.get("steps").and_then(|v| v.as_array()).ok_or_else(|| {
-            AgentError::InvalidResponse("plan JSON missing 'steps' array".to_string())
-        })?;
+        let steps_value = value
+            .get("steps")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| {
+                AgentError::InvalidResponse("plan JSON missing 'steps' array".to_string())
+            })?;
 
         if steps_value.is_empty() {
-            return Err(AgentError::InvalidResponse(
-                "plan has no steps".to_string(),
-            ));
+            return Err(AgentError::InvalidResponse("plan has no steps".to_string()));
         }
 
         let mut plan = Plan::new(session_id, goal.to_string(), rationale);
@@ -264,10 +279,7 @@ impl PlanParser {
                 .get("capability_id")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    AgentError::InvalidResponse(format!(
-                        "step {} missing 'capability_id' field",
-                        i
-                    ))
+                    AgentError::InvalidResponse(format!("step {} missing 'capability_id' field", i))
                 })?
                 .to_string();
 
@@ -464,7 +476,8 @@ mod tests {
 
     #[test]
     fn extract_json_markdown_code_block_json() {
-        let response = "Some preamble text.\n\n```json\n{\"key\": \"value\"}\n```\n\nTrailing text.";
+        let response =
+            "Some preamble text.\n\n```json\n{\"key\": \"value\"}\n```\n\nTrailing text.";
         let v = PlanParser::extract_json(response).unwrap();
         assert_eq!(v["key"], "value");
     }
@@ -516,8 +529,8 @@ mod tests {
             ]
         }"#;
 
-        let plan = PlanParser::parse(session_id, "Fix disk space", llm_response, &registry)
-            .unwrap();
+        let plan =
+            PlanParser::parse(session_id, "Fix disk space", llm_response, &registry).unwrap();
 
         assert_eq!(plan.session_id, session_id);
         assert_eq!(plan.goal, "Fix disk space");
@@ -548,8 +561,7 @@ mod tests {
 }
 ```"#;
 
-        let plan = PlanParser::parse(session_id, "Restart nginx", llm_response, &registry)
-            .unwrap();
+        let plan = PlanParser::parse(session_id, "Restart nginx", llm_response, &registry).unwrap();
         assert_eq!(plan.steps.len(), 1);
         assert_eq!(plan.overall_risk, RiskTier::Medium);
     }

@@ -219,7 +219,10 @@ impl HostExecutor for SshHostExecutor {
             }
             Err(_) => {
                 return CapabilityResult::failure(
-                    format!("ssh to {} timed out after {} ms", host.hostname, ctx.timeout_ms),
+                    format!(
+                        "ssh to {} timed out after {} ms",
+                        host.hostname, ctx.timeout_ms
+                    ),
                     true,
                 )
             }
@@ -256,7 +259,14 @@ pub async fn execute_on_fleet(
     args: &HashMap<String, Value>,
     ctx: &ExecutionContext,
 ) -> FleetResult {
-    execute_on_fleet_with(Arc::new(SshHostExecutor::default()), config, cap_id, args, ctx).await
+    execute_on_fleet_with(
+        Arc::new(SshHostExecutor::default()),
+        config,
+        cap_id,
+        args,
+        ctx,
+    )
+    .await
 }
 
 /// Like [`execute_on_fleet`] but with a caller-supplied [`HostExecutor`].
@@ -387,7 +397,9 @@ mod tests {
     #[tokio::test]
     async fn single_host_round_trip() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let exec = Arc::new(EchoExecutor { calls: Arc::clone(&calls) });
+        let exec = Arc::new(EchoExecutor {
+            calls: Arc::clone(&calls),
+        });
         let config = fleet(&["app-01"]);
 
         let results =
@@ -406,7 +418,9 @@ mod tests {
     #[tokio::test]
     async fn multi_host_parallel_all_succeed() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let exec = Arc::new(EchoExecutor { calls: Arc::clone(&calls) });
+        let exec = Arc::new(EchoExecutor {
+            calls: Arc::clone(&calls),
+        });
         let config = fleet(&["h1", "h2", "h3", "h4", "h5"]);
 
         let results =
@@ -421,7 +435,9 @@ mod tests {
 
     #[tokio::test]
     async fn error_isolation_one_host_fails() {
-        let exec = Arc::new(FlakyExecutor { fail_host: "bad-host".to_string() });
+        let exec = Arc::new(FlakyExecutor {
+            fail_host: "bad-host".to_string(),
+        });
         let config = fleet(&["good-1", "bad-host", "good-2"]);
 
         let results =

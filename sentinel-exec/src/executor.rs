@@ -269,8 +269,7 @@ impl CommandExecutor {
         let capture_fut = capture.capture(stdout_handle, stderr_handle);
         let wait_fut = guard.wait_with_timeout();
 
-        let ((stdout, stderr, truncated), wait_result) =
-            tokio::join!(capture_fut, wait_fut);
+        let ((stdout, stderr, truncated), wait_result) = tokio::join!(capture_fut, wait_fut);
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -288,10 +287,7 @@ impl CommandExecutor {
 
         debug!(
             command,
-            exit_code,
-            duration_ms,
-            truncated,
-            "command completed"
+            exit_code, duration_ms, truncated, "command completed"
         );
 
         Ok(ExecutionResult {
@@ -404,7 +400,10 @@ mod tests {
         // "/usr/bin/echo" must NOT match an allowlist entry of "echo".
         let exec = CommandExecutor::new(allow(&["echo"]));
         let result = exec.dry_run_validate("/usr/bin/echo", &[]).unwrap();
-        assert!(!result.valid, "full path should not match bare basename in allowlist");
+        assert!(
+            !result.valid,
+            "full path should not match bare basename in allowlist"
+        );
 
         // Only the exact string is matched.
         let exec2 = CommandExecutor::new(allow(&["/usr/bin/echo"]));
@@ -486,7 +485,10 @@ mod tests {
         let result = exec
             .execute(
                 "sh",
-                &["-c", "python3 -c \"print('x' * 200)\" 2>/dev/null || printf '%200s' '' | tr ' ' 'x'"],
+                &[
+                    "-c",
+                    "python3 -c \"print('x' * 200)\" 2>/dev/null || printf '%200s' '' | tr ' ' 'x'",
+                ],
                 &ctx,
             )
             .await
@@ -543,7 +545,11 @@ mod tests {
         let exec = CommandExecutor::new(allow(&["true"]));
         let ctx = make_ctx();
         let result = exec.execute("true", &[], &ctx).await.expect("execute");
-        assert!(result.duration_ms < 60_000, "duration too large: {}ms", result.duration_ms);
+        assert!(
+            result.duration_ms < 60_000,
+            "duration too large: {}ms",
+            result.duration_ms
+        );
     }
 
     // ── RealCommandExecutor (low-level trait) ─────────────────────────────────

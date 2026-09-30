@@ -54,10 +54,7 @@ impl AuditLog {
     /// Append an event, computing its hash automatically.
     ///
     /// Returns a reference to the newly created `AuditEvent`.
-    pub async fn append(
-        &mut self,
-        event_type: AuditEventType,
-    ) -> Result<&AuditEvent, AuditError> {
+    pub async fn append(&mut self, event_type: AuditEventType) -> Result<&AuditEvent, AuditError> {
         let event_id = Uuid::new_v4();
         let sequence = self.next_sequence;
         let timestamp = Utc::now();
@@ -178,9 +175,7 @@ fn event_type_label(et: &AuditEventType) -> String {
             plan_id,
             step_count,
             overall_risk,
-        } => format!(
-            "PlanProposed plan={plan_id} steps={step_count} risk={overall_risk}"
-        ),
+        } => format!("PlanProposed plan={plan_id} steps={step_count} risk={overall_risk}"),
         AuditEventType::PlanApproved {
             plan_id,
             approval_mode,
@@ -211,9 +206,7 @@ fn event_type_label(et: &AuditEventType) -> String {
             capability_id,
             effect,
             rule_id,
-        } => format!(
-            "PolicyEvaluated cap={capability_id} effect={effect} rule={rule_id:?}"
-        ),
+        } => format!("PolicyEvaluated cap={capability_id} effect={effect} rule={rule_id:?}"),
         AuditEventType::PolicyDenied {
             capability_id,
             reason,
@@ -224,9 +217,7 @@ fn event_type_label(et: &AuditEventType) -> String {
         AuditEventType::SessionCompleted {
             duration_ms,
             capabilities_executed,
-        } => format!(
-            "SessionCompleted duration={duration_ms}ms caps={capabilities_executed}"
-        ),
+        } => format!("SessionCompleted duration={duration_ms}ms caps={capabilities_executed}"),
         AuditEventType::SessionAborted { reason } => {
             format!("SessionAborted reason=\"{reason}\"")
         }
@@ -239,8 +230,13 @@ fn event_type_label(et: &AuditEventType) -> String {
         AuditEventType::FleetCommandDispatched {
             command_id,
             host_count,
+        } => format!("FleetCommandDispatched cmd={command_id} hosts={host_count}"),
+        AuditEventType::SuspectedPromptInjection {
+            capability_id,
+            patterns,
         } => format!(
-            "FleetCommandDispatched cmd={command_id} hosts={host_count}"
+            "SuspectedPromptInjection cap={capability_id} patterns={}",
+            patterns.join("|")
         ),
         AuditEventType::McpToolCalled { tool, .. } => format!("McpToolCalled tool={tool}"),
     }

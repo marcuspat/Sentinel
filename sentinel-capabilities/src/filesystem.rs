@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::sync::Arc;
 use tracing::debug;
 
 fn validate_safe_path(path: &str) -> Result<(), CoreError> {
@@ -17,15 +17,25 @@ fn validate_safe_path(path: &str) -> Result<(), CoreError> {
     }
     // Block critical system directories
     const BLOCKED_PREFIXES: &[&str] = &[
-        "/etc", "/boot", "/sys", "/proc", "/dev",
-        "/bin", "/sbin", "/usr/bin", "/usr/sbin", "/lib", "/lib64",
+        "/etc",
+        "/boot",
+        "/sys",
+        "/proc",
+        "/dev",
+        "/bin",
+        "/sbin",
+        "/usr/bin",
+        "/usr/sbin",
+        "/lib",
+        "/lib64",
         "/run/systemd",
     ];
     for blocked in BLOCKED_PREFIXES {
         if path == *blocked || path.starts_with(&format!("{}/", blocked)) {
-            return Err(CoreError::InvalidArgs(
-                format!("path '{}' is in a protected system directory", path)
-            ));
+            return Err(CoreError::InvalidArgs(format!(
+                "path '{}' is in a protected system directory",
+                path
+            )));
         }
     }
     Ok(())
@@ -93,7 +103,12 @@ impl Capability for DiskUsage {
         debug!("DiskUsage: running df -h on {}", path);
         let df_out = match self
             .executor
-            .run("df", &["-h", path], &ctx.env_overrides, ctx.resource_limits.max_output_bytes)
+            .run(
+                "df",
+                &["-h", path],
+                &ctx.env_overrides,
+                ctx.resource_limits.max_output_bytes,
+            )
             .await
         {
             Ok(o) => o,
@@ -103,7 +118,12 @@ impl Capability for DiskUsage {
         debug!("DiskUsage: running du -sh on {}", path);
         let du_out = match self
             .executor
-            .run("du", &["-sh", path], &ctx.env_overrides, ctx.resource_limits.max_output_bytes)
+            .run(
+                "du",
+                &["-sh", path],
+                &ctx.env_overrides,
+                ctx.resource_limits.max_output_bytes,
+            )
             .await
         {
             Ok(o) => o,
@@ -174,7 +194,8 @@ impl Capability for LogVacuum {
     }
 
     fn validate_args(&self, args: &Value) -> Result<(), CoreError> {
-        let log_dir = args.get("log_dir")
+        let log_dir = args
+            .get("log_dir")
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
             .ok_or_else(|| CoreError::InvalidArgs("'log_dir' must be a non-empty string".into()))?;
@@ -183,7 +204,9 @@ impl Capability for LogVacuum {
             .get("older_than_days")
             .ok_or_else(|| CoreError::InvalidArgs("'older_than_days' is required".into()))?;
         if !days.is_number() {
-            return Err(CoreError::InvalidArgs("'older_than_days' must be a number".into()));
+            return Err(CoreError::InvalidArgs(
+                "'older_than_days' must be a number".into(),
+            ));
         }
         if let Some(v) = days.as_f64() {
             if v < 0.0 {
@@ -201,7 +224,10 @@ impl Capability for LogVacuum {
         }
         let log_dir = args["log_dir"].as_str().unwrap();
         let days = args["older_than_days"].as_f64().unwrap() as i64;
-        let explicit_dry = args.get("dry_run").and_then(Value::as_bool).unwrap_or(false);
+        let explicit_dry = args
+            .get("dry_run")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
 
         if explicit_dry || ctx.dry_run {
             return self.dry_run(args, ctx).await;
@@ -234,7 +260,12 @@ impl Capability for LogVacuum {
         for f in &files {
             match self
                 .executor
-                .run("rm", &["-f", f], &ctx.env_overrides, ctx.resource_limits.max_output_bytes)
+                .run(
+                    "rm",
+                    &["-f", f],
+                    &ctx.env_overrides,
+                    ctx.resource_limits.max_output_bytes,
+                )
                 .await
             {
                 Ok(r) if r.success() => {
@@ -341,12 +372,14 @@ impl Capability for CachePrune {
             .get("cache_dirs")
             .ok_or_else(|| CoreError::InvalidArgs("'cache_dirs' is required".into()))?;
         if !dirs.is_array() {
-            return Err(CoreError::InvalidArgs("'cache_dirs' must be an array".into()));
+            return Err(CoreError::InvalidArgs(
+                "'cache_dirs' must be an array".into(),
+            ));
         }
         for (i, dir) in dirs.as_array().unwrap().iter().enumerate() {
-            let path = dir.as_str().ok_or_else(|| CoreError::InvalidArgs(
-                format!("cache_dirs[{}] must be a string", i)
-            ))?;
+            let path = dir.as_str().ok_or_else(|| {
+                CoreError::InvalidArgs(format!("cache_dirs[{}] must be a string", i))
+            })?;
             validate_safe_path(path)?;
         }
         Ok(())
@@ -356,7 +389,10 @@ impl Capability for CachePrune {
         if let Err(e) = self.validate_args(&args) {
             return CapabilityResult::failure(e.to_string(), false);
         }
-        let explicit_dry = args.get("dry_run").and_then(Value::as_bool).unwrap_or(false);
+        let explicit_dry = args
+            .get("dry_run")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         if explicit_dry || ctx.dry_run {
             return self.dry_run(args, ctx).await;
         }
@@ -368,7 +404,12 @@ impl Capability for CachePrune {
             let arg_refs: Vec<&str> = pm_args.to_vec();
             match self
                 .executor
-                .run(prog, &arg_refs, &ctx.env_overrides, ctx.resource_limits.max_output_bytes)
+                .run(
+                    prog,
+                    &arg_refs,
+                    &ctx.env_overrides,
+                    ctx.resource_limits.max_output_bytes,
+                )
                 .await
             {
                 Ok(out) => actions.push(json!({
@@ -418,8 +459,8 @@ impl Capability for CachePrune {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use sentinel_exec::{CommandExecutorTrait, CommandOutput};
+    use std::collections::HashMap;
 
     struct DummyExecutor;
     #[async_trait::async_trait]
@@ -444,7 +485,9 @@ mod tests {
     fn disk_usage_valid_args() {
         let cap = DiskUsage::new(make_executor());
         assert!(cap.validate_args(&json!({ "path": "/" })).is_ok());
-        assert!(cap.validate_args(&json!({ "path": "/var", "depth": 2 })).is_ok());
+        assert!(cap
+            .validate_args(&json!({ "path": "/var", "depth": 2 }))
+            .is_ok());
     }
 
     #[test]
@@ -462,7 +505,9 @@ mod tests {
     #[test]
     fn disk_usage_bad_depth_type() {
         let cap = DiskUsage::new(make_executor());
-        assert!(cap.validate_args(&json!({ "path": "/", "depth": "two" })).is_err());
+        assert!(cap
+            .validate_args(&json!({ "path": "/", "depth": "two" }))
+            .is_err());
     }
 
     // LogVacuum validate_args
@@ -483,7 +528,9 @@ mod tests {
     #[test]
     fn log_vacuum_missing_days() {
         let cap = LogVacuum::new(make_executor());
-        assert!(cap.validate_args(&json!({ "log_dir": "/var/log" })).is_err());
+        assert!(cap
+            .validate_args(&json!({ "log_dir": "/var/log" }))
+            .is_err());
     }
 
     #[test]
@@ -512,6 +559,8 @@ mod tests {
     #[test]
     fn cache_prune_dirs_not_array() {
         let cap = CachePrune::new(make_executor());
-        assert!(cap.validate_args(&json!({ "cache_dirs": "/tmp/cache" })).is_err());
+        assert!(cap
+            .validate_args(&json!({ "cache_dirs": "/tmp/cache" }))
+            .is_err());
     }
 }

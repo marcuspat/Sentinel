@@ -100,10 +100,7 @@ impl FleetTopology {
     pub fn hosts_in_group(&self, group: &str) -> Vec<&Host> {
         match self.groups.get(group) {
             None => Vec::new(),
-            Some(ids) => ids
-                .iter()
-                .filter_map(|id| self.hosts.get(id))
-                .collect(),
+            Some(ids) => ids.iter().filter_map(|id| self.hosts.get(id)).collect(),
         }
     }
 
@@ -124,15 +121,9 @@ impl FleetTopology {
     pub fn select_hosts(&self, selector: &HostSelector) -> Vec<&Host> {
         match selector {
             HostSelector::All => self.all_hosts(),
-            HostSelector::ById(id) => self
-                .get_host(id)
-                .into_iter()
-                .collect(),
+            HostSelector::ById(id) => self.get_host(id).into_iter().collect(),
             HostSelector::ByGroup(group) => self.hosts_in_group(group),
-            HostSelector::ByIds(ids) => ids
-                .iter()
-                .filter_map(|id| self.get_host(id))
-                .collect(),
+            HostSelector::ByIds(ids) => ids.iter().filter_map(|id| self.get_host(id)).collect(),
             HostSelector::Online => self.online_hosts(),
             HostSelector::Custom { .. } => {
                 // Extension point: expression-language evaluation not yet implemented.

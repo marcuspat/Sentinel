@@ -78,7 +78,9 @@ impl SentinelMetrics {
                 "sentinel_capability_duration_ms",
                 "Capability execution duration in milliseconds",
             )
-            .buckets(vec![1.0, 5.0, 10.0, 50.0, 100.0, 500.0, 1_000.0, 5_000.0, 30_000.0]),
+            .buckets(vec![
+                1.0, 5.0, 10.0, 50.0, 100.0, 500.0, 1_000.0, 5_000.0, 30_000.0,
+            ]),
         )?;
 
         let active_sessions = Gauge::with_opts(Opts::new(
@@ -224,6 +226,9 @@ mod tests {
         SentinelMetrics::new(&registry).unwrap();
         // Attempting to register the same metric names again must fail.
         let result = SentinelMetrics::new(&registry);
-        assert!(result.is_err(), "double registration should return an error");
+        assert!(
+            result.is_err(),
+            "double registration should return an error"
+        );
     }
 }

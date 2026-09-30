@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::sync::Arc;
 use tracing::debug;
 
 use sentinel_core::{
@@ -56,7 +56,12 @@ impl Capability for ProcessList {
 
         let ps_out = match self
             .executor
-            .run("ps", &["aux"], &ctx.env_overrides, ctx.resource_limits.max_output_bytes)
+            .run(
+                "ps",
+                &["aux"],
+                &ctx.env_overrides,
+                ctx.resource_limits.max_output_bytes,
+            )
             .await
         {
             Ok(o) => o,
@@ -151,7 +156,9 @@ impl Capability for ProcessKill {
             return Err(CoreError::InvalidArgs("'pid' must be a number".into()));
         }
         if pid.as_f64().map(|v| v <= 1.0).unwrap_or(true) {
-            return Err(CoreError::InvalidArgs("'pid' must be > 1 (PID 1 is reserved)".into()));
+            return Err(CoreError::InvalidArgs(
+                "'pid' must be > 1 (PID 1 is reserved)".into(),
+            ));
         }
         const ALLOWED_SIGNALS: &[&str] = &[
             "TERM", "KILL", "HUP", "INT", "QUIT", "USR1", "USR2", "CONT", "STOP",
@@ -162,9 +169,10 @@ impl Capability for ProcessKill {
             }
             let sig_str = sig.as_str().unwrap();
             if !ALLOWED_SIGNALS.contains(&sig_str) {
-                return Err(CoreError::InvalidArgs(
-                    format!("'signal' must be one of: {}", ALLOWED_SIGNALS.join(", "))
-                ));
+                return Err(CoreError::InvalidArgs(format!(
+                    "'signal' must be one of: {}",
+                    ALLOWED_SIGNALS.join(", ")
+                )));
             }
         }
         Ok(())
@@ -344,7 +352,12 @@ impl Capability for ServiceRestart {
 
         let pre_state = match self
             .executor
-            .run("systemctl", &["is-active", service], &ctx.env_overrides, 4096)
+            .run(
+                "systemctl",
+                &["is-active", service],
+                &ctx.env_overrides,
+                4096,
+            )
             .await
         {
             Ok(o) => o.stdout.trim().to_string(),
@@ -385,7 +398,11 @@ impl Capability for ServiceRestart {
         }))
     }
 
-    async fn invoke_inverse(&self, args: Value, ctx: &ExecutionContext) -> Option<CapabilityResult> {
+    async fn invoke_inverse(
+        &self,
+        args: Value,
+        ctx: &ExecutionContext,
+    ) -> Option<CapabilityResult> {
         if let Err(e) = self.validate_args(&args) {
             return Some(CapabilityResult::failure(e.to_string(), false));
         }
@@ -489,7 +506,11 @@ impl Capability for ServiceStop {
         CapabilityResult::dry_run(json!({ "service": service, "note": "Dry-run: not stopped" }))
     }
 
-    async fn invoke_inverse(&self, args: Value, ctx: &ExecutionContext) -> Option<CapabilityResult> {
+    async fn invoke_inverse(
+        &self,
+        args: Value,
+        ctx: &ExecutionContext,
+    ) -> Option<CapabilityResult> {
         let start_cap = ServiceStart::new(Arc::clone(&self.executor));
         Some(start_cap.invoke(args, ctx).await)
     }
@@ -563,7 +584,12 @@ impl Capability for ServiceStart {
 
         let status = match self
             .executor
-            .run("systemctl", &["is-active", service], &ctx.env_overrides, 4096)
+            .run(
+                "systemctl",
+                &["is-active", service],
+                &ctx.env_overrides,
+                4096,
+            )
             .await
         {
             Ok(o) => o.stdout.trim().to_string(),
@@ -589,8 +615,8 @@ impl Capability for ServiceStart {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use sentinel_exec::{CommandExecutorTrait, CommandOutput};
+    use std::collections::HashMap;
 
     struct DummyExecutor;
     #[async_trait::async_trait]
@@ -634,7 +660,9 @@ mod tests {
     fn process_kill_valid() {
         let cap = ProcessKill::new(make_executor());
         assert!(cap.validate_args(&json!({ "pid": 1234 })).is_ok());
-        assert!(cap.validate_args(&json!({ "pid": 1234, "signal": "KILL" })).is_ok());
+        assert!(cap
+            .validate_args(&json!({ "pid": 1234, "signal": "KILL" }))
+            .is_ok());
     }
 
     #[test]
@@ -664,13 +692,17 @@ mod tests {
     #[test]
     fn process_kill_bad_signal_type() {
         let cap = ProcessKill::new(make_executor());
-        assert!(cap.validate_args(&json!({ "pid": 1234, "signal": 9 })).is_err());
+        assert!(cap
+            .validate_args(&json!({ "pid": 1234, "signal": 9 }))
+            .is_err());
     }
 
     #[test]
     fn process_kill_invalid_signal_name() {
         let cap = ProcessKill::new(make_executor());
-        assert!(cap.validate_args(&json!({ "pid": 1234, "signal": "INVALID" })).is_err());
+        assert!(cap
+            .validate_args(&json!({ "pid": 1234, "signal": "INVALID" }))
+            .is_err());
     }
 
     // ServiceStatus

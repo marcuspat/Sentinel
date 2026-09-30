@@ -356,7 +356,6 @@ pub struct App {
     pub state: AppState,
 
     // ── New fields for live agent integration ─────────────────────────────────
-
     /// Goal that was just submitted; `run_app()` drains this each tick to
     /// spawn the background agent task.
     pub pending_goal: Option<String>,
@@ -366,7 +365,6 @@ pub struct App {
     pub dry_run: bool,
 
     // ── Private channels ──────────────────────────────────────────────────────
-
     /// Channel responder for the in-flight approval modal, if any.
     approval_responder: Option<oneshot::Sender<ApprovalOutcome>>,
     /// Channel on which the agent emits approval requests for the TUI to poll.
@@ -454,11 +452,7 @@ impl App {
     ///
     /// Used by [`poll_approval`](Self::poll_approval); also exposed for direct
     /// wiring and tests.
-    pub fn begin_approval(
-        &mut self,
-        step: PlanStep,
-        responder: oneshot::Sender<ApprovalOutcome>,
-    ) {
+    pub fn begin_approval(&mut self, step: PlanStep, responder: oneshot::Sender<ApprovalOutcome>) {
         self.status_message = Some(format!(
             "Approval required for '{}' (risk {:?}). Press y to approve, n/Esc to abort.",
             step.capability_id, step.risk_tier
@@ -495,12 +489,8 @@ impl App {
         }
         if let Some(s) = &mut self.session {
             match outcome {
-                ApprovalOutcome::Approve => {
-                    s.log(LogLevel::Info, "Step approved by operator.")
-                }
-                ApprovalOutcome::Abort => {
-                    s.log(LogLevel::Warn, "Step aborted by operator.")
-                }
+                ApprovalOutcome::Approve => s.log(LogLevel::Info, "Step approved by operator."),
+                ApprovalOutcome::Abort => s.log(LogLevel::Warn, "Step aborted by operator."),
             }
         }
         self.status_message = Some(match outcome {
@@ -610,8 +600,7 @@ impl App {
                     s.current_plan = Some(plan);
                 }
                 self.current_tab = Tab::Plan;
-                self.status_message =
-                    Some("New plan proposed. Press 'a' to approve all.".into());
+                self.status_message = Some("New plan proposed. Press 'a' to approve all.".into());
             }
             SessionUpdate::PlanApproved => {
                 if let Some(s) = &mut self.session {
@@ -788,7 +777,10 @@ mod tests {
         app.plan_view.load_plan(&make_plan());
         app.approve_all();
         assert!(app.plan_view.steps.iter().all(|s| s.approved));
-        assert_eq!(app.plan_view.approval_mode, Some(ApprovalDecision::ApproveAll));
+        assert_eq!(
+            app.plan_view.approval_mode,
+            Some(ApprovalDecision::ApproveAll)
+        );
     }
 
     #[test]
@@ -798,7 +790,10 @@ mod tests {
         app.approve_step(0);
         assert!(app.plan_view.steps[0].approved);
         assert!(!app.plan_view.steps[1].approved);
-        assert_eq!(app.plan_view.approval_mode, Some(ApprovalDecision::StepByStep));
+        assert_eq!(
+            app.plan_view.approval_mode,
+            Some(ApprovalDecision::StepByStep)
+        );
     }
 
     #[test]
@@ -853,10 +848,7 @@ mod tests {
         app.session = Some(Session::new("goal", "h", false));
         app.apply_session_update(SessionUpdate::SessionCompleted);
         assert_eq!(app.current_tab, Tab::Audit);
-        assert_eq!(
-            app.session.as_ref().unwrap().phase,
-            SessionPhase::Completed
-        );
+        assert_eq!(app.session.as_ref().unwrap().phase, SessionPhase::Completed);
     }
 
     // ── poll_session_updates ──────────────────────────────────────────────────

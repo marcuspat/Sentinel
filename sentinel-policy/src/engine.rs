@@ -51,12 +51,10 @@ pub fn default_policy_with_kill_switch(kill_switch: Arc<KillSwitch>) -> PolicyEv
 fn default_rules() -> Vec<PolicyRule> {
     vec![
         // ── Highest priority: hard denials ────────────────────────────────────
-
         PolicyRule {
             id: "deny-critical".into(),
             name: "Deny Critical Risk".into(),
-            description: "Block all capabilities with Critical risk tier unconditionally."
-                .into(),
+            description: "Block all capabilities with Critical risk tier unconditionally.".into(),
             effect: RuleEffect::Deny,
             conditions: vec![RuleCondition::RiskTierExactly {
                 tier: RiskTier::Critical,
@@ -65,7 +63,6 @@ fn default_rules() -> Vec<PolicyRule> {
             enabled: true,
         },
         // ── Deny high-risk mutating operations ───────────────────────────────
-
         PolicyRule {
             id: "deny-high-mutating".into(),
             name: "Deny High-Risk Mutating".into(),
@@ -75,7 +72,9 @@ fn default_rules() -> Vec<PolicyRule> {
             effect: RuleEffect::Deny,
             conditions: vec![RuleCondition::And {
                 conditions: vec![
-                    RuleCondition::RiskTierAtLeast { tier: RiskTier::High },
+                    RuleCondition::RiskTierAtLeast {
+                        tier: RiskTier::High,
+                    },
                     RuleCondition::CapabilityKindIs {
                         kind: CapabilityKind::Mutating,
                     },
@@ -84,9 +83,7 @@ fn default_rules() -> Vec<PolicyRule> {
             priority: 20,
             enabled: true,
         },
-
         // ── Require human approval for high-risk read-only operations ─────────
-
         PolicyRule {
             id: "require-approval-high-read".into(),
             name: "Require Approval for High-Risk Read".into(),
@@ -95,7 +92,9 @@ fn default_rules() -> Vec<PolicyRule> {
             effect: RuleEffect::RequireApproval,
             conditions: vec![RuleCondition::And {
                 conditions: vec![
-                    RuleCondition::RiskTierExactly { tier: RiskTier::High },
+                    RuleCondition::RiskTierExactly {
+                        tier: RiskTier::High,
+                    },
                     RuleCondition::CapabilityKindIs {
                         kind: CapabilityKind::ReadOnly,
                     },
@@ -104,14 +103,11 @@ fn default_rules() -> Vec<PolicyRule> {
             priority: 50,
             enabled: true,
         },
-
         // ── Require approval for mutating medium-risk ops ─────────────────────
-
         PolicyRule {
             id: "require-approval-medium-mutating".into(),
             name: "Require Approval for Mutating Medium-Risk".into(),
-            description:
-                "Require approval for Medium-risk capabilities that are mutating.".into(),
+            description: "Require approval for Medium-risk capabilities that are mutating.".into(),
             effect: RuleEffect::RequireApproval,
             conditions: vec![RuleCondition::And {
                 conditions: vec![
@@ -126,15 +122,12 @@ fn default_rules() -> Vec<PolicyRule> {
             priority: 100,
             enabled: true,
         },
-
         // ── Allow read-only capabilities at Low / Medium risk ─────────────────
-
         PolicyRule {
             id: "allow-read-low-medium".into(),
             name: "Allow Read-Only Low/Medium Risk".into(),
             description:
-                "Permit read-only capabilities that are Low or Medium risk without approval."
-                    .into(),
+                "Permit read-only capabilities that are Low or Medium risk without approval.".into(),
             effect: RuleEffect::Allow,
             conditions: vec![RuleCondition::And {
                 conditions: vec![
@@ -151,15 +144,15 @@ fn default_rules() -> Vec<PolicyRule> {
             priority: 200,
             enabled: true,
         },
-
         // ── Allow all low-risk capabilities ───────────────────────────────────
-
         PolicyRule {
             id: "allow-low-risk".into(),
             name: "Allow Low Risk".into(),
             description: "Permit all Low-risk capabilities unconditionally.".into(),
             effect: RuleEffect::Allow,
-            conditions: vec![RuleCondition::RiskTierExactly { tier: RiskTier::Low }],
+            conditions: vec![RuleCondition::RiskTierExactly {
+                tier: RiskTier::Low,
+            }],
             priority: 300,
             enabled: true,
         },
@@ -192,7 +185,11 @@ mod tests {
     #[test]
     fn default_policy_denies_critical() {
         let evaluator = default_policy();
-        let decision = evaluator.evaluate(req("halt_system", CapabilityKind::Mutating, RiskTier::Critical));
+        let decision = evaluator.evaluate(req(
+            "halt_system",
+            CapabilityKind::Mutating,
+            RiskTier::Critical,
+        ));
         assert!(
             matches!(decision.effect, PolicyEffect::Denied { .. }),
             "critical risk must be denied; got {:?}",
@@ -216,7 +213,8 @@ mod tests {
     #[test]
     fn default_policy_allows_low_risk_read() {
         let evaluator = default_policy();
-        let decision = evaluator.evaluate(req("disk_usage", CapabilityKind::ReadOnly, RiskTier::Low));
+        let decision =
+            evaluator.evaluate(req("disk_usage", CapabilityKind::ReadOnly, RiskTier::Low));
         assert_eq!(
             decision.effect,
             PolicyEffect::Allowed,
@@ -229,7 +227,11 @@ mod tests {
     fn default_policy_requires_approval_for_medium_mutating() {
         let evaluator = default_policy();
         // Medium-risk Write operation
-        let decision = evaluator.evaluate(req("write_file", CapabilityKind::Mutating, RiskTier::Medium));
+        let decision = evaluator.evaluate(req(
+            "write_file",
+            CapabilityKind::Mutating,
+            RiskTier::Medium,
+        ));
         assert_eq!(
             decision.effect,
             PolicyEffect::RequiresApproval,
@@ -242,7 +244,11 @@ mod tests {
     fn default_policy_allows_medium_risk_with_no_path() {
         let evaluator = default_policy();
         // Medium-risk Read operation (not blocked by resource guards — no path)
-        let decision = evaluator.evaluate(req("check_metrics", CapabilityKind::ReadOnly, RiskTier::Medium));
+        let decision = evaluator.evaluate(req(
+            "check_metrics",
+            CapabilityKind::ReadOnly,
+            RiskTier::Medium,
+        ));
         assert_eq!(
             decision.effect,
             PolicyEffect::Allowed,
@@ -267,7 +273,11 @@ mod tests {
     #[test]
     fn default_policy_blocks_service_control_on_sshd() {
         let evaluator = default_policy();
-        let mut request = req("restart_service", CapabilityKind::Mutating, RiskTier::Medium);
+        let mut request = req(
+            "restart_service",
+            CapabilityKind::Mutating,
+            RiskTier::Medium,
+        );
         request.args = serde_json::json!({ "service": "sshd" });
         let decision = evaluator.evaluate(request);
         assert!(
@@ -300,7 +310,12 @@ mod tests {
         // A request with no matching rules MUST be denied.
         let ks = KillSwitch::new();
         let evaluator = PolicyEvaluator::new(vec![], ks, vec![]);
-        for risk in [RiskTier::Low, RiskTier::Medium, RiskTier::High, RiskTier::Critical] {
+        for risk in [
+            RiskTier::Low,
+            RiskTier::Medium,
+            RiskTier::High,
+            RiskTier::Critical,
+        ] {
             for kind in [
                 CapabilityKind::ReadOnly,
                 CapabilityKind::Mutating,

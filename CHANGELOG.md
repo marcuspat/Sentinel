@@ -6,6 +6,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security
+- **Prompt-injection hardening (ADR-014).** Capability output is now
+  *spotlighted*: wrapped in nonce-tagged `UNTRUSTED-DATA` fences with forged
+  fences neutralised, and both system prompts tell the model that fenced
+  content is data, never instructions. Byte budgets apply to the raw payload
+  (neutralisation runs after truncation, so padding can't evict real data).
+  A heuristic tripwire scans the full rendered payload of observations and
+  execution results across all phases (investigate, plan, execute) — a
+  superset of the truncated prefix prompts embed; hits are logged and
+  written to the hash-chained audit log as a new
+  `SuspectedPromptInjection` event
+
+### Fixed
+- Investigation prompts panicked when truncating capability output whose
+  2 000th byte fell inside a multi-byte UTF-8 character. Truncation is now
+  char-boundary safe, and planning prompts, which previously had no limit, are
+  now capped per observation
+
 ### Added
 - **MCP policy gate** (`sentinel-mcp` crate, ADR-013): `sentinel serve --mcp`
   speaks MCP over stdio and exposes five tools: `sentinel_capabilities`,

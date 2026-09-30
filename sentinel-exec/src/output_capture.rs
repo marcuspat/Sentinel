@@ -150,8 +150,7 @@ mod tests {
     #[tokio::test]
     async fn exact_limit_not_truncated() {
         let cap = OutputCapture::new(10); // 5 bytes per stream
-        let (out, err, truncated) =
-            cap.capture(cursor(b"hello"), cursor(b"world")).await;
+        let (out, err, truncated) = cap.capture(cursor(b"hello"), cursor(b"world")).await;
         assert_eq!(out, "hello");
         assert_eq!(err, "world");
         assert!(!truncated, "exact-limit data should not be truncated");
@@ -160,8 +159,9 @@ mod tests {
     #[tokio::test]
     async fn stderr_truncation_independent_of_stdout() {
         let cap = OutputCapture::new(10); // 5 bytes per stream
-        let (out, err, truncated) =
-            cap.capture(cursor(b"hi"), cursor(b"this is way too long")).await;
+        let (out, err, truncated) = cap
+            .capture(cursor(b"hi"), cursor(b"this is way too long"))
+            .await;
         assert_eq!(out, "hi");
         assert!(truncated);
         assert!(err.contains("[...output truncated...]"));

@@ -25,6 +25,7 @@ pub mod openai;
 pub mod planner;
 pub mod prompt_builder;
 pub mod reasoning_loop;
+pub mod untrusted;
 
 pub use anthropic::AnthropicBackend;
 pub use backend::{LlmBackend, LlmResponse, Message, MessageRole};

@@ -182,14 +182,18 @@ impl Plan {
 
     /// Reject the plan with a reason.
     pub fn reject(&mut self, reason: impl Into<String>) {
-        self.approval = ApprovalDecision::Rejected { reason: reason.into() };
+        self.approval = ApprovalDecision::Rejected {
+            reason: reason.into(),
+        };
     }
 
     /// Returns `true` if the plan has been approved (full or step-by-step).
     pub fn is_approved(&self) -> bool {
         matches!(
             self.approval,
-            ApprovalDecision::FullApproval | ApprovalDecision::StepByStep | ApprovalDecision::Edited
+            ApprovalDecision::FullApproval
+                | ApprovalDecision::StepByStep
+                | ApprovalDecision::Edited
         )
     }
 
@@ -311,7 +315,9 @@ mod tests {
             ApprovalDecision::Pending,
             ApprovalDecision::FullApproval,
             ApprovalDecision::StepByStep,
-            ApprovalDecision::Rejected { reason: "nope".into() },
+            ApprovalDecision::Rejected {
+                reason: "nope".into(),
+            },
             ApprovalDecision::Edited,
         ];
         for d in &decisions {
@@ -374,7 +380,7 @@ mod tests {
         let mut p = make_plan();
         let mut step0 = make_step(0, RiskTier::Low);
         step0.status = StepStatus::Completed;
-        let step1 = make_step(1, RiskTier::Low);  // Pending
+        let step1 = make_step(1, RiskTier::Low); // Pending
         let mut step2 = make_step(2, RiskTier::Low);
         step2.status = StepStatus::Skipped;
 

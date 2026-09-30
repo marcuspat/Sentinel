@@ -16,9 +16,9 @@ pub mod registry;
 
 pub use registry::CapabilityRegistry;
 
-use std::sync::Arc;
 use sentinel_core::Capability;
 use sentinel_exec::CommandExecutorTrait;
+use std::sync::Arc;
 
 /// Construct a `Vec` of every built-in capability backed by the provided
 /// executor.  This is the canonical way to get all capabilities for injection
@@ -50,8 +50,8 @@ pub fn all_capabilities(executor: Arc<dyn CommandExecutorTrait>) -> Vec<Box<dyn 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use sentinel_exec::{CommandExecutorTrait, CommandOutput};
+    use std::collections::HashMap;
 
     struct DummyExecutor;
     #[async_trait::async_trait]
@@ -93,7 +93,11 @@ mod tests {
         for cap in &caps {
             let m = cap.manifest();
             assert!(!m.name.is_empty(), "Empty name for capability '{}'", m.id);
-            assert!(!m.description.is_empty(), "Empty description for '{}'", m.id);
+            assert!(
+                !m.description.is_empty(),
+                "Empty description for '{}'",
+                m.id
+            );
         }
     }
 }

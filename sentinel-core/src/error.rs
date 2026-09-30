@@ -16,7 +16,10 @@ pub enum CoreError {
 
     /// A requested session phase transition is not legal from the current phase.
     #[error("Invalid session phase transition from {from:?} to {to:?}")]
-    InvalidPhaseTransition { from: SessionPhase, to: SessionPhase },
+    InvalidPhaseTransition {
+        from: SessionPhase,
+        to: SessionPhase,
+    },
 
     /// JSON serialisation or deserialisation failure.
     #[error("Serialization error: {0}")]
@@ -50,7 +53,10 @@ mod tests {
     #[test]
     fn display_invalid_args() {
         let err = CoreError::InvalidArgs("missing field `host`".into());
-        assert_eq!(err.to_string(), "Invalid capability arguments: missing field `host`");
+        assert_eq!(
+            err.to_string(),
+            "Invalid capability arguments: missing field `host`"
+        );
     }
 
     #[test]
@@ -97,7 +103,10 @@ mod tests {
     #[test]
     fn display_rollback_failed() {
         let err = CoreError::RollbackFailed("step 3 left partial state".into());
-        assert_eq!(err.to_string(), "Rollback failed: step 3 left partial state");
+        assert_eq!(
+            err.to_string(),
+            "Rollback failed: step 3 left partial state"
+        );
     }
 
     #[test]

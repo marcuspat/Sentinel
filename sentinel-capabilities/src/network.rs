@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::sync::Arc;
 use tracing::debug;
 
 use sentinel_core::{
@@ -73,10 +73,16 @@ impl Capability for NetworkConnections {
         }
         let state_filter = args.get("state").and_then(Value::as_str);
 
-        let tool = if let Ok(out) =
-            self.executor.run("which", &["ss"], &ctx.env_overrides, 4096).await
+        let tool = if let Ok(out) = self
+            .executor
+            .run("which", &["ss"], &ctx.env_overrides, 4096)
+            .await
         {
-            if out.success() { "ss" } else { "netstat" }
+            if out.success() {
+                "ss"
+            } else {
+                "netstat"
+            }
         } else {
             "netstat"
         };
@@ -84,7 +90,12 @@ impl Capability for NetworkConnections {
         debug!("NetworkConnections: using {}", tool);
         let out = match self
             .executor
-            .run(tool, &["-tuln"], &ctx.env_overrides, ctx.resource_limits.max_output_bytes)
+            .run(
+                tool,
+                &["-tuln"],
+                &ctx.env_overrides,
+                ctx.resource_limits.max_output_bytes,
+            )
             .await
         {
             Ok(o) => o,
@@ -172,17 +183,29 @@ impl Capability for NetworkInterfaces {
             return CapabilityResult::failure(e.to_string(), false);
         }
 
-        let (tool, tool_args): (&str, &[&str]) =
-            if let Ok(out) = self.executor.run("which", &["ip"], &ctx.env_overrides, 4096).await {
-                if out.success() { ("ip", &["addr"]) } else { ("ifconfig", &["-a"]) }
+        let (tool, tool_args): (&str, &[&str]) = if let Ok(out) = self
+            .executor
+            .run("which", &["ip"], &ctx.env_overrides, 4096)
+            .await
+        {
+            if out.success() {
+                ("ip", &["addr"])
             } else {
                 ("ifconfig", &["-a"])
-            };
+            }
+        } else {
+            ("ifconfig", &["-a"])
+        };
 
         debug!("NetworkInterfaces: using {}", tool);
         let out = match self
             .executor
-            .run(tool, tool_args, &ctx.env_overrides, ctx.resource_limits.max_output_bytes)
+            .run(
+                tool,
+                tool_args,
+                &ctx.env_overrides,
+                ctx.resource_limits.max_output_bytes,
+            )
             .await
         {
             Ok(o) => o,
@@ -193,7 +216,12 @@ impl Capability for NetworkInterfaces {
             .stdout
             .split('\n')
             .fold(Vec::<(String, Vec<String>)>::new(), |mut acc, line| {
-                if line.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                if line
+                    .chars()
+                    .next()
+                    .map(|c| c.is_ascii_digit())
+                    .unwrap_or(false)
+                {
                     let name = line.split(':').nth(1).unwrap_or("").trim().to_string();
                     acc.push((name, vec![line.to_string()]));
                 } else if let Some(last) = acc.last_mut() {
@@ -245,9 +273,9 @@ impl Capability for NetworkInterfaces {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sentinel_exec::{CommandExecutorTrait, CommandOutput};
     use std::collections::HashMap;
     use std::sync::Mutex;
-    use sentinel_exec::{CommandExecutorTrait, CommandOutput};
     use uuid::Uuid;
 
     struct DummyExecutor;
@@ -276,7 +304,9 @@ mod tests {
 
     impl MockExecutor {
         fn new() -> Arc<Self> {
-            Arc::new(Self { calls: Mutex::new(Vec::new()) })
+            Arc::new(Self {
+                calls: Mutex::new(Vec::new()),
+            })
         }
     }
 
@@ -289,10 +319,10 @@ mod tests {
             _env: &HashMap<String, String>,
             _max_output_bytes: usize,
         ) -> Result<CommandOutput, sentinel_exec::ExecError> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push((program.to_string(), args.iter().map(|s| s.to_string()).collect()));
+            self.calls.lock().unwrap().push((
+                program.to_string(),
+                args.iter().map(|s| s.to_string()).collect(),
+            ));
 
             let stdout = match program {
                 // `which <tool>` succeeds → primary tool (ss / ip) is selected.
@@ -389,7 +419,9 @@ mod tests {
     #[test]
     fn network_connections_with_state() {
         let cap = NetworkConnections::new(make_executor());
-        assert!(cap.validate_args(&json!({ "state": "ESTABLISHED" })).is_ok());
+        assert!(cap
+            .validate_args(&json!({ "state": "ESTABLISHED" }))
+            .is_ok());
     }
 
     #[test]

@@ -14,8 +14,7 @@ use tracing::{error, info};
 use uuid::Uuid;
 
 use sentinel_agent_llm::{
-    AnthropicBackend, CapabilityRegistry, LlmBackend, OpenAiBackend, ReasoningConfig,
-    ReasoningLoop,
+    AnthropicBackend, CapabilityRegistry, LlmBackend, OpenAiBackend, ReasoningConfig, ReasoningLoop,
 };
 use sentinel_audit::AuditLog;
 use sentinel_capabilities::all_capabilities;
@@ -24,8 +23,7 @@ use sentinel_exec::RealCommandExecutor;
 use sentinel_policy::default_policy;
 
 use crate::app::{
-    ApprovalOutcome, ApprovalRequest, LogEntry, LogLevel, Plan, PlanStep, SessionUpdate,
-    StepStatus,
+    ApprovalOutcome, ApprovalRequest, LogEntry, LogLevel, Plan, PlanStep, SessionUpdate, StepStatus,
 };
 
 // ── AgentConfig ───────────────────────────────────────────────────────────────
@@ -82,9 +80,9 @@ async fn run_inner(
     // ── 1. Build the LLM backend ──────────────────────────────────────────────
     let backend: Box<dyn LlmBackend> = match config.backend_name.as_str() {
         "anthropic" => {
-            let key = config
-                .anthropic_api_key
-                .ok_or_else(|| anyhow::anyhow!("ANTHROPIC_API_KEY required for anthropic backend"))?;
+            let key = config.anthropic_api_key.ok_or_else(|| {
+                anyhow::anyhow!("ANTHROPIC_API_KEY required for anthropic backend")
+            })?;
             Box::new(AnthropicBackend::new(key, config.model.clone()))
         }
         "openai" => {

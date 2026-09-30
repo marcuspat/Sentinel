@@ -49,7 +49,10 @@ impl KillSwitch {
         // concurrent reader that sees the flag as `true` is guaranteed to also
         // see the reason.
         {
-            let mut r = self.reason.write().expect("kill_switch reason lock poisoned");
+            let mut r = self
+                .reason
+                .write()
+                .expect("kill_switch reason lock poisoned");
             *r = Some(reason_str);
         }
         {
@@ -68,7 +71,10 @@ impl KillSwitch {
     pub fn deactivate(&self) {
         self.activated.store(false, Ordering::SeqCst);
         {
-            let mut r = self.reason.write().expect("kill_switch reason lock poisoned");
+            let mut r = self
+                .reason
+                .write()
+                .expect("kill_switch reason lock poisoned");
             *r = None;
         }
         {

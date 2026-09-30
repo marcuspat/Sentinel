@@ -68,7 +68,12 @@ fn bench_capability_result_matching(c: &mut Criterion) {
 fn bench_manifest_construction(c: &mut Criterion) {
     let mut group = c.benchmark_group("CapabilityManifest");
 
-    for risk in [RiskTier::Low, RiskTier::Medium, RiskTier::High, RiskTier::Critical] {
+    for risk in [
+        RiskTier::Low,
+        RiskTier::Medium,
+        RiskTier::High,
+        RiskTier::Critical,
+    ] {
         group.bench_with_input(
             BenchmarkId::new("construct", format!("{:?}", risk)),
             &risk,
@@ -88,7 +93,12 @@ fn bench_manifest_construction(c: &mut Criterion) {
 }
 
 fn bench_risk_tier_ordering(c: &mut Criterion) {
-    let tiers = [RiskTier::Low, RiskTier::Medium, RiskTier::High, RiskTier::Critical];
+    let tiers = [
+        RiskTier::Low,
+        RiskTier::Medium,
+        RiskTier::High,
+        RiskTier::Critical,
+    ];
 
     c.bench_function("RiskTier max of 4", |b| {
         b.iter(|| {
@@ -135,9 +145,7 @@ fn bench_result_serialization(c: &mut Criterion) {
 
     let serialized = serde_json::to_string(&result).unwrap();
     c.bench_function("deserialize CapabilityResult", |b| {
-        b.iter(|| {
-            serde_json::from_str::<CapabilityResult>(black_box(&serialized)).unwrap()
-        })
+        b.iter(|| serde_json::from_str::<CapabilityResult>(black_box(&serialized)).unwrap())
     });
 }
 
