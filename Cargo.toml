@@ -8,12 +8,14 @@ members = [
     "sentinel-audit",
     "sentinel-tui",
     "sentinel-fleet",
+    "sentinel-mcp",
 ]
 resolver = "2"
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.86"
 license = "MIT"
 repository = "https://github.com/marcuspat/Sentinel"
 authors = ["Sentinel Contributors"]
@@ -87,6 +89,7 @@ sentinel-agent-llm = { path = "sentinel-agent-llm", version = "0.1.0" }
 sentinel-audit = { path = "sentinel-audit", version = "0.1.0" }
 sentinel-tui = { path = "sentinel-tui", version = "0.1.0" }
 sentinel-fleet = { path = "sentinel-fleet", version = "0.1.0" }
+sentinel-mcp = { path = "sentinel-mcp", version = "0.1.0" }
 
 [profile.release]
 opt-level = 3

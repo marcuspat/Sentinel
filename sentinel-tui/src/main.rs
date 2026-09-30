@@ -31,12 +31,10 @@ use sentinel_tui::{
     ui,
 };
 
+mod gate_cmd;
+
 #[derive(Parser)]
-#[command(
-    name = "sentinel",
-    version,
-    about = "Agentic system administration tool"
-)]
+#[command(name = "sentinel", version, about = "Agentic system administration tool")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -84,7 +82,9 @@ enum Commands {
     /// Show current policy rules
     Policy,
     /// Verify an audit log file
-    VerifyAudit { path: std::path::PathBuf },
+    VerifyAudit {
+        path: std::path::PathBuf,
+    },
     /// Run a capability across multiple hosts in parallel over SSH
     Fleet {
         /// Operational goal / label for this fleet run
@@ -109,13 +109,66 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Serve Sentinel as a policy gate for coding agents (MCP over stdio)
+    Serve {
+        /// Speak the Model Context Protocol over stdin/stdout
+        #[arg(long)]
+        mcp: bool,
+        /// Plan store + audit log directory
+        #[arg(long, env = "SENTINEL_STATE_DIR")]
+        state_dir: Option<std::path::PathBuf>,
+        /// Host label used for policy evaluation and execution context
+        #[arg(long, default_value = "localhost")]
+        host: String,
+    },
+    /// List plans proposed through the MCP gate
+    Plans {
+        #[arg(long, env = "SENTINEL_STATE_DIR")]
+        state_dir: Option<std::path::PathBuf>,
+    },
+    /// Show one stored plan as JSON
+    ShowPlan {
+        plan_id: Uuid,
+        #[arg(long, env = "SENTINEL_STATE_DIR")]
+        state_dir: Option<std::path::PathBuf>,
+    },
+    /// Approve a proposed plan (operator only; requires an interactive terminal)
+    Approve {
+        plan_id: Uuid,
+        #[arg(long, env = "SENTINEL_STATE_DIR")]
+        state_dir: Option<std::path::PathBuf>,
+    },
+    /// Reject a proposed plan
+    Reject {
+        plan_id: Uuid,
+        /// Reason recorded in the plan store and audit log
+        #[arg(long, default_value = "rejected by operator")]
+        reason: String,
+        #[arg(long, env = "SENTINEL_STATE_DIR")]
+        state_dir: Option<std::path::PathBuf>,
+    },
+    /// Execute an approved plan (refuses anything not approved or modified since approval)
+    Execute {
+        plan_id: Uuid,
+        #[arg(long, env = "SENTINEL_STATE_DIR")]
+        state_dir: Option<std::path::PathBuf>,
+        /// Per-step timeout in milliseconds
+        #[arg(long, default_value_t = 60_000)]
+        step_timeout_ms: u64,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    fmt().with_env_filter(EnvFilter::new(&cli.log_level)).init();
+    // Logs always go to stderr: stdout is reserved for command output and,
+    // under `serve --mcp`, for the JSON-RPC stream.
+    fmt()
+        .with_env_filter(EnvFilter::new(&cli.log_level))
+        .with_writer(io::stderr)
+        .with_ansi(io::IsTerminal::is_terminal(&io::stderr()))
+        .init();
 
     match cli.command.unwrap_or(Commands::Tui {
         host: "localhost".into(),
@@ -133,6 +186,24 @@ async fn main() -> Result<()> {
             .await?
         }
         Commands::Capabilities => list_capabilities(),
+        Commands::Serve {
+            mcp,
+            state_dir,
+            host,
+        } => gate_cmd::serve(mcp, state_dir, host).await?,
+        Commands::Plans { state_dir } => gate_cmd::list_plans(state_dir)?,
+        Commands::ShowPlan { plan_id, state_dir } => gate_cmd::show_plan(plan_id, state_dir)?,
+        Commands::Approve { plan_id, state_dir } => gate_cmd::approve(plan_id, state_dir).await?,
+        Commands::Reject {
+            plan_id,
+            reason,
+            state_dir,
+        } => gate_cmd::reject(plan_id, reason, state_dir).await?,
+        Commands::Execute {
+            plan_id,
+            state_dir,
+            step_timeout_ms,
+        } => gate_cmd::execute(plan_id, state_dir, step_timeout_ms).await?,
         Commands::Policy => show_policy(),
         Commands::VerifyAudit { path } => verify_audit(&path)?,
         Commands::Fleet {
@@ -164,7 +235,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-// ââ TUI entry point âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ── TUI entry point ───────────────────────────────────────────────────────────
 
 async fn run_tui(
     host: String,
@@ -221,11 +292,11 @@ async fn run_app(
     model: String,
 ) -> Result<()> {
     loop {
-        // ââ Drain live agent updates ââââââââââââââââââââââââââââââââââââââ
+        // ── Drain live agent updates ──────────────────────────────────────
         app.poll_session_updates();
         app.poll_approval();
 
-        // ââ Spawn agent task when a new goal arrives ââââââââââââââââââââââ
+        // ── Spawn agent task when a new goal arrives ──────────────────────
         if let Some(goal) = app.pending_goal.take() {
             let (update_tx, update_rx) = mpsc::channel(128);
             let (approval_tx, approval_rx) = mpsc::channel(4);
@@ -245,10 +316,10 @@ async fn run_app(
             tokio::spawn(run_agent_session(config, update_tx, approval_tx));
         }
 
-        // ââ Render ââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+        // ── Render ────────────────────────────────────────────────────────
         terminal.draw(|f| ui::draw(f, app))?;
 
-        // ââ Input âââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+        // ── Input ─────────────────────────────────────────────────────────
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
                 handle_events(app, AppEvent::Key(key)).await?;
@@ -264,10 +335,10 @@ async fn run_app(
     Ok(())
 }
 
-// ââ Subcommand handlers âââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ── Subcommand handlers ───────────────────────────────────────────────────────
 
-/// Wire the full agent stack â LLM backend, executor, capabilities, registry,
-/// policy, audit log â and drive an investigate â plan â approve â act session.
+/// Wire the full agent stack — LLM backend, executor, capabilities, registry,
+/// policy, audit log — and drive an investigate → plan → approve → act session.
 #[allow(clippy::too_many_arguments)]
 async fn run_agent(
     goal: String,
@@ -316,10 +387,7 @@ async fn run_agent(
     // 4. Policy + audit log (persisted to a per-session JSONL file).
     let policy = Arc::new(default_policy());
     let audit_path = std::path::PathBuf::from(format!("sentinel-audit-{session_id}.jsonl"));
-    let audit = Arc::new(Mutex::new(AuditLog::new(
-        session_id,
-        Some(audit_path.clone()),
-    )));
+    let audit = Arc::new(Mutex::new(AuditLog::new(session_id, Some(audit_path.clone()))));
 
     // 5. Reasoning loop wired with the concrete capabilities.
     let agent = ReasoningLoop::new(
@@ -338,12 +406,12 @@ async fn run_agent(
     println!();
 
     // Investigate.
-    println!("ââ Investigating ââ");
+    println!("── Investigating ──");
     let observations = agent.investigate(session_id, &goal, &host).await?;
     println!("Collected {} observation(s).", observations.len());
 
     // Plan.
-    println!("\nââ Planning ââ");
+    println!("\n── Planning ──");
     let mut plan = agent.plan(session_id, &goal, &observations).await?;
     println!("Rationale    : {}", plan.rationale);
     println!("Overall risk : {:?}", plan.overall_risk);
@@ -366,7 +434,7 @@ async fn run_agent(
 
     // Approve.
     let approval = if auto_approve {
-        println!("\nAuto-approve enabled â executing plan.");
+        println!("\nAuto-approve enabled — executing plan.");
         ApprovalDecision::FullApproval
     } else {
         use std::io::Write as _;
@@ -390,7 +458,7 @@ async fn run_agent(
     }
 
     // Act.
-    println!("\nââ Executing ââ");
+    println!("\n── Executing ──");
     let summary = agent
         .execute_plan(session_id, &host, &mut plan, approval)
         .await?;
@@ -444,18 +512,18 @@ async fn run_fleet(
         match &results[hostname] {
             CapabilityResult::Success { output } => {
                 ok += 1;
-                println!("â {hostname}: success");
+                println!("✔ {hostname}: success");
                 if let Ok(pretty) = serde_json::to_string(output) {
                     println!("    {pretty}");
                 }
             }
             CapabilityResult::Failure { error, .. } => {
                 failed += 1;
-                println!("x {hostname}: FAILED â {error}");
+                println!("x {hostname}: FAILED — {error}");
             }
             CapabilityResult::DryRun { predicted_effect } => {
                 ok += 1;
-                println!("â¢ {hostname}: dry-run");
+                println!("• {hostname}: dry-run");
                 if let Ok(pretty) = serde_json::to_string(predicted_effect) {
                     println!("    {pretty}");
                 }
@@ -464,10 +532,7 @@ async fn run_fleet(
     }
 
     println!();
-    println!(
-        "Fleet summary: {ok} succeeded, {failed} failed across {} host(s).",
-        config.len()
-    );
+    println!("Fleet summary: {ok} succeeded, {failed} failed across {} host(s).", config.len());
     Ok(())
 }
 
@@ -493,14 +558,11 @@ fn show_policy() {
     let rules = evaluator.rules();
 
     println!(
-        "Default Sentinel policy (deny-by-default) â {} rule(s):",
+        "Default Sentinel policy (deny-by-default) — {} rule(s):",
         rules.len()
     );
     println!("{:-<78}", "");
-    println!(
-        "  {:<5} {:<33} {:<16} Conditions",
-        "Prio", "Rule ID", "Effect"
-    );
+    println!("  {:<5} {:<33} {:<16} Conditions", "Prio", "Rule ID", "Effect");
     println!("{:-<78}", "");
 
     for rule in rules {
@@ -579,12 +641,12 @@ fn verify_audit(path: &std::path::Path) -> Result<()> {
 
     if result.valid {
         println!(
-            "Audit log VALID â {} event(s) verified.",
+            "Audit log VALID — {} event(s) verified.",
             result.events_checked
         );
     } else {
         eprintln!(
-            "Audit log INVALID â chain broken at sequence {}.",
+            "Audit log INVALID — chain broken at sequence {}.",
             result.first_broken_at.unwrap_or(0)
         );
         if let Some(err) = &result.error {

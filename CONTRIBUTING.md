@@ -14,7 +14,8 @@ explicit security review in the PR description — see below.
 
 Requirements:
 
-- Rust **1.75** or newer (stable)
+- Rust **1.86** or newer (stable) — set as `rust-version` in the workspace manifest;
+  `ratatui 0.30` and `clap 4.6` are what put the floor there
 - `cargo clippy`, `cargo fmt` (`rustup component add clippy rustfmt`)
 - `cargo audit` (`cargo install cargo-audit`) for dependency checks
 - Docker, only if you are changing the image
@@ -43,7 +44,7 @@ should be resolved or explained in the PR.
 
 ## Workspace Layout
 
-The workspace is eight crates with a unidirectional dependency graph — no
+The workspace is nine crates with a unidirectional dependency graph — no
 circular dependencies. Keep it that way.
 
 | Crate | Bounded context |
@@ -55,6 +56,7 @@ circular dependencies. Keep it that way.
 | `sentinel-agent-llm` | Investigate–Plan–Approve–Act reasoning loop, LLM backends |
 | `sentinel-audit` | SHA-256 hash-chained audit log, verification, metrics |
 | `sentinel-fleet` | mTLS controller/agent fleet management |
+| `sentinel-mcp` | MCP policy gate for coding agents: tools, plan store, approved-plan execution |
 | `sentinel-tui` | Terminal UI and the `sentinel` binary |
 
 A new capability belongs in `sentinel-capabilities` and must be registered with a
@@ -113,6 +115,7 @@ expect questions:
 - the audit hash chain, its genesis constant, or the verifier (`sentinel-audit`)
 - mTLS setup or certificate pinning (`sentinel-fleet`)
 - the approval gate and capability-ID validation (`sentinel-agent-llm`)
+- the MCP tool surface, out-of-band approval and plan-integrity checks (`sentinel-mcp`)
 
 Loosening any of these defaults is a breaking change even if the types do not
 change.

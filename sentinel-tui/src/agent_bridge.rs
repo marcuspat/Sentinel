@@ -1,6 +1,6 @@
 //! Bridge between the TUI event loop and the [`ReasoningLoop`].
 //!
-//! [`run_agent_session`] drives the full investigate â plan â approve â act
+//! [`run_agent_session`] drives the full investigate → plan → approve → act
 //! lifecycle in a background tokio task, emitting [`SessionUpdate`]s into the
 //! TUI's mpsc channel and surfacing a plan-gate [`ApprovalRequest`] for
 //! operator sign-off before execution begins.
@@ -26,7 +26,7 @@ use crate::app::{
     ApprovalOutcome, ApprovalRequest, LogEntry, LogLevel, Plan, PlanStep, SessionUpdate, StepStatus,
 };
 
-// ââ AgentConfig âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ── AgentConfig ───────────────────────────────────────────────────────────────
 
 /// Configuration for a single agent session, passed to [`run_agent_session`].
 ///
@@ -50,7 +50,7 @@ pub struct AgentConfig {
     pub model: String,
 }
 
-// ââ Public entry point ââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ── Public entry point ────────────────────────────────────────────────────────
 
 /// Drive a full agent session in the background, emitting [`SessionUpdate`]s.
 ///
@@ -68,7 +68,7 @@ pub async fn run_agent_session(
     }
 }
 
-// ââ Session driver ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ── Session driver ────────────────────────────────────────────────────────────
 
 async fn run_inner(
     config: AgentConfig,
@@ -77,7 +77,7 @@ async fn run_inner(
 ) -> Result<()> {
     let session_id = Uuid::new_v4();
 
-    // ââ 1. Build the LLM backend ââââââââââââââââââââââââââââââââââââââââââââââ
+    // ── 1. Build the LLM backend ──────────────────────────────────────────────
     let backend: Box<dyn LlmBackend> = match config.backend_name.as_str() {
         "anthropic" => {
             let key = config.anthropic_api_key.ok_or_else(|| {
@@ -94,7 +94,7 @@ async fn run_inner(
         other => return Err(anyhow::anyhow!("unknown backend '{other}'")),
     };
 
-    // ââ 2. Assemble capabilities, registry, policy, and audit log âââââââââââââ
+    // ── 2. Assemble capabilities, registry, policy, and audit log ─────────────
     let executor = Arc::new(RealCommandExecutor);
     let caps = all_capabilities(executor);
 
@@ -117,7 +117,7 @@ async fn run_inner(
     )
     .with_capabilities(caps);
 
-    // ââ 3. Investigate ââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+    // ── 3. Investigate ────────────────────────────────────────────────────────
     emit(
         update_tx,
         SessionUpdate::PhaseChanged(SessionPhase::Investigating),
@@ -139,13 +139,13 @@ async fn run_inner(
         update_tx,
         LogLevel::Info,
         format!(
-            "Investigation complete â {} observation(s) collected.",
+            "Investigation complete — {} observation(s) collected.",
             observations.len()
         ),
     )
     .await;
 
-    // ââ 4. Plan âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+    // ── 4. Plan ───────────────────────────────────────────────────────────────
     emit(
         update_tx,
         SessionUpdate::PhaseChanged(SessionPhase::Planning),
@@ -161,25 +161,25 @@ async fn run_inner(
         plan_id = %core_plan.id,
         steps = core_plan.steps.len(),
         overall_risk = ?core_plan.overall_risk,
-        "plan ready â sending to TUI"
+        "plan ready — sending to TUI"
     );
 
     let app_plan = core_plan_to_app(&core_plan);
     emit(update_tx, SessionUpdate::PlanProposed(app_plan)).await;
 
-    // ââ 5. Dry-run short-circuit ââââââââââââââââââââââââââââââââââââââââââââââ
+    // ── 5. Dry-run short-circuit ──────────────────────────────────────────────
     if config.dry_run {
         log_entry(
             update_tx,
             LogLevel::Info,
-            "Dry-run mode â plan generated but NOT executed.".to_string(),
+            "Dry-run mode — plan generated but NOT executed.".to_string(),
         )
         .await;
         emit(update_tx, SessionUpdate::SessionCompleted).await;
         return Ok(());
     }
 
-    // ââ 6. Operator approval gate âââââââââââââââââââââââââââââââââââââââââââââ
+    // ── 6. Operator approval gate ─────────────────────────────────────────────
     //
     // Surface a single plan-gate ApprovalRequest so the TUI's y/n modal handles
     // it uniformly.  The gate step represents "approve the full execution plan".
@@ -228,7 +228,7 @@ async fn run_inner(
         }
     }
 
-    // ââ 7. Execute ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+    // ── 7. Execute ────────────────────────────────────────────────────────────
     emit(
         update_tx,
         SessionUpdate::PhaseChanged(SessionPhase::Executing),
@@ -238,7 +238,7 @@ async fn run_inner(
         update_tx,
         LogLevel::Info,
         format!(
-            "Executing {} step(s) on {}â¦",
+            "Executing {} step(s) on {}…",
             core_plan.steps.len(),
             config.host
         ),
@@ -272,7 +272,7 @@ async fn run_inner(
         update_tx,
         LogLevel::Info,
         format!(
-            "Execution complete â {} succeeded, {} failed, {} rolled back in {}ms.",
+            "Execution complete — {} succeeded, {} failed, {} rolled back in {}ms.",
             summary.steps_completed,
             summary.steps_failed,
             summary.steps_rolled_back,
@@ -285,12 +285,12 @@ async fn run_inner(
     Ok(())
 }
 
-// ââ Helpers âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Send a [`SessionUpdate`], ignoring send errors (TUI may have exited).
 async fn emit(tx: &mpsc::Sender<SessionUpdate>, update: SessionUpdate) {
     if tx.send(update).await.is_err() {
-        error!("TUI update channel closed â dropping update");
+        error!("TUI update channel closed — dropping update");
     }
 }
 

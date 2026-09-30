@@ -1,4 +1,4 @@
-# ADR-013: Spotlighting Untrusted Capability Output
+# ADR-014: Spotlighting Untrusted Capability Output
 
 **Status:** Accepted  
 **Date:** 2026-09-26  

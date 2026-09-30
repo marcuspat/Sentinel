@@ -87,6 +87,13 @@ pub enum AuditEventType {
         capability_id: String,
         patterns: Vec<String>,
     },
+    /// An MCP client (e.g. a coding agent) invoked a Sentinel tool over the
+    /// `sentinel serve --mcp` gate.  Recorded *before* the tool runs so that
+    /// every call — including rejected ones — lands in the chain.
+    McpToolCalled {
+        tool: String,
+        arguments: serde_json::Value,
+    },
 }
 
 /// A single entry in the audit log, carrying its position in the hash chain.
@@ -318,6 +325,10 @@ mod tests {
             AuditEventType::FleetCommandDispatched {
                 command_id: Uuid::new_v4(),
                 host_count: 10,
+            },
+            AuditEventType::McpToolCalled {
+                tool: "sentinel_policy_check".into(),
+                arguments: serde_json::json!({"capability_id": "disk_usage"}),
             },
         ];
 

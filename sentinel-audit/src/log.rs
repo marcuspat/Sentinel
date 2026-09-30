@@ -238,6 +238,7 @@ fn event_type_label(et: &AuditEventType) -> String {
             "SuspectedPromptInjection cap={capability_id} patterns={}",
             patterns.join("|")
         ),
+        AuditEventType::McpToolCalled { tool, .. } => format!("McpToolCalled tool={tool}"),
     }
 }
 
