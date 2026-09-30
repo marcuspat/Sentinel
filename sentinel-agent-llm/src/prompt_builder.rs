@@ -255,19 +255,30 @@ If not, request the next capability invocation:
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
+    /// Raw (untrusted) payload text for a capability result — exactly the
+    /// text `spotlight()` embeds into prompts. The prompt-injection tripwire
+    /// must scan this same rendering so the audit trail reflects the bytes
+    /// the model was actually shown.
+    pub fn capability_result_payload(result: &sentinel_core::CapabilityResult) -> String {
+        match result {
+            sentinel_core::CapabilityResult::Success { output } => {
+                serde_json::to_string_pretty(output).unwrap_or_default()
+            }
+            sentinel_core::CapabilityResult::Failure { error, .. } => error.clone(),
+            sentinel_core::CapabilityResult::DryRun { predicted_effect } => {
+                serde_json::to_string_pretty(predicted_effect).unwrap_or_default()
+            }
+        }
+    }
+
     /// Status label and raw (untrusted) payload text for an observation.
     fn observation_payload(obs: &Observation) -> (&'static str, String) {
-        match &obs.result {
-            sentinel_core::CapabilityResult::Success { output } => (
-                "OK",
-                serde_json::to_string_pretty(output).unwrap_or_default(),
-            ),
-            sentinel_core::CapabilityResult::Failure { error, .. } => ("FAILED", error.clone()),
-            sentinel_core::CapabilityResult::DryRun { predicted_effect } => (
-                "DRY-RUN",
-                serde_json::to_string_pretty(predicted_effect).unwrap_or_default(),
-            ),
-        }
+        let label = match &obs.result {
+            sentinel_core::CapabilityResult::Success { .. } => "OK",
+            sentinel_core::CapabilityResult::Failure { .. } => "FAILED",
+            sentinel_core::CapabilityResult::DryRun { .. } => "DRY-RUN",
+        };
+        (label, Self::capability_result_payload(&obs.result))
     }
 
     fn format_capabilities(capabilities: &[CapabilityManifest]) -> String {

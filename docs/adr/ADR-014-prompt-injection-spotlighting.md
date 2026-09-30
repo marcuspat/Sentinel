@@ -30,21 +30,36 @@ window.
 
 1. **Spotlighting** (Hines et al., 2024). Every observation is wrapped in
    `<<UNTRUSTED-DATA nonce=N source=S>> … <<END-UNTRUSTED-DATA nonce=N>>`
-   with a fresh 48-bit random nonce per block. An attacker who can't see the
-   prompt can't forge a matching close fence.
-2. **Delimiter neutralisation.** Occurrences of the fence marker inside data
-   are rewritten, so forged fences never appear verbatim. `source` is
-   restricted to `[A-Za-z0-9_.-]`.
+   with a fresh 48-bit random nonce per block. Forging a matching close
+   fence requires guessing that nonce (~2⁻⁴⁸ per attempt); the guarantee
+   assumes the attacker never observes a rendered prompt — if model output
+   or logs ever echo one back, its nonces must be considered burned.
+2. **Delimiter neutralisation.** Occurrences of the exact ASCII fence
+   marker inside data are rewritten, so that marker never appears verbatim
+   in fenced content. Homoglyph or whitespace variants are *not* rewritten
+   — the hard guarantee is the nonce, not marker erasure. `source` is
+   restricted to `[A-Za-z0-9_.-]` (disallowed characters replaced with
+   `_`).
 3. **System prompt contract.** Both investigation and planning system prompts
    state that fenced content is data, never instructions, and ask the model
    to flag suspected injections in its `reasoning`.
 4. **UTF-8-safe budgets.** Truncation walks back to a char boundary; budgets
    are 2 KB per observation in the repeated investigation turn and 4 KB in
    the planning prompt, with an explicit "truncated by Sentinel" trailer.
+   Budgets apply to the **raw** payload bytes — neutralisation runs after
+   the cut, so attacker padding cannot evict real data, and the trailer
+   reports true payload sizes. Known limit: budgets are per-observation
+   only; the aggregate prompt still grows linearly with rounds × budget.
 5. **Tripwire + audit.** A cheap case-insensitive phrase scanner runs over
-   each observation. Hits emit a `warn!` and a new hash-chained
-   `SuspectedPromptInjection` audit event. It's a detector, not a filter:
-   data is still passed (fenced) so the model sees real system state.
+   each observation's exact prompt rendering (the same bytes the model is
+   shown), in every phase: `investigate()`, `plan()` (including
+   caller-supplied observations), and `execute_plan()` results. Hits emit
+   a `warn!` and a new hash-chained `SuspectedPromptInjection` audit
+   event. It's a detector, not a filter: data is still passed (fenced) so
+   the model sees real system state. The pattern list is deliberately
+   high-precision — generic phrases that routinely appear in benign system
+   output are excluded, because a noisy alarm trains operators to ignore
+   the audit trail.
 
 ## Consequences
 
