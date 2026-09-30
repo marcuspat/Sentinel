@@ -113,7 +113,6 @@ const INJECTION_PATTERNS: &[&str] = &[
     "</system>",
     "<|im_start|>",
     "done_investigating",
-    "\"capability_id\"",
     "approve this plan",
     "operator has approved",
 ];
