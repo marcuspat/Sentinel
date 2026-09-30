@@ -349,7 +349,7 @@ impl ReasoningLoop {
                     // prompt regardless, but a hit is surfaced and audited.
                     // Scans the exact rendering the prompt embeds.
                     let rendered = PromptBuilder::capability_result_payload(&result);
-                    self.tripwire(&req.capability_id, &rendered).await?;
+                    self.tripwire(&req.capability_id, &rendered).await;
 
                     observations.push(Observation::new(req.capability_id, req.args, result));
                 }
@@ -375,10 +375,14 @@ impl ReasoningLoop {
     /// what the model sees: a hit may flag an attempt past the truncation
     /// point that never reached the model. Recording the attempt is the
     /// point of a tripwire.
-    async fn tripwire(&self, capability_id: &str, rendered: &str) -> Result<(), AgentError> {
+    ///
+    /// Infallible by design: an audit-append failure is logged, never
+    /// propagated — hostile input must not be able to alter the loop's
+    /// control flow (e.g. skip execution bookkeeping or rollback).
+    async fn tripwire(&self, capability_id: &str, rendered: &str) {
         let hits = detect_injection_markers(rendered);
         if hits.is_empty() {
-            return Ok(());
+            return;
         }
         warn!(
             capability_id = %capability_id,
@@ -386,13 +390,19 @@ impl ReasoningLoop {
             "capability output matched prompt-injection heuristics"
         );
         let mut log = self.audit_log.lock().await;
-        log.append(AuditEventType::SuspectedPromptInjection {
-            capability_id: capability_id.to_string(),
-            patterns: hits.iter().map(|s| s.to_string()).collect(),
-        })
-        .await
-        .map_err(|e| AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string())))?;
-        Ok(())
+        if let Err(e) = log
+            .append(AuditEventType::SuspectedPromptInjection {
+                capability_id: capability_id.to_string(),
+                patterns: hits.iter().map(|s| s.to_string()).collect(),
+            })
+            .await
+        {
+            error!(
+                capability_id = %capability_id,
+                error = %e,
+                "failed to append SuspectedPromptInjection audit event"
+            );
+        }
     }
 
     // ── Plan phase ────────────────────────────────────────────────────────────
@@ -413,7 +423,7 @@ impl ReasoningLoop {
         // (TUI agent bridge, MCP gate): audit them before the LLM sees them.
         for obs in observations {
             let rendered = PromptBuilder::capability_result_payload(&obs.result);
-            self.tripwire(&obs.capability_id, &rendered).await?;
+            self.tripwire(&obs.capability_id, &rendered).await;
         }
 
         let all_caps = self.capability_registry.all_cloned();
@@ -653,7 +663,7 @@ impl ReasoningLoop {
                     // Execution results surface to the operator and can feed
                     // later planning rounds: same tripwire as investigate().
                     let rendered = PromptBuilder::capability_result_payload(&cap_result);
-                    self.tripwire(&capability_id, &rendered).await?;
+                    self.tripwire(&capability_id, &rendered).await;
 
                     plan.steps[i].status = StepStatus::Completed;
                     steps_completed += 1;
@@ -684,7 +694,7 @@ impl ReasoningLoop {
                     let err_msg = e.to_string();
 
                     // Failed capability output is just as attacker-influenced.
-                    self.tripwire(&capability_id, &err_msg).await?;
+                    self.tripwire(&capability_id, &err_msg).await;
 
                     plan.steps[i].status = StepStatus::Failed;
                     any_failure = true;
