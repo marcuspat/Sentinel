@@ -51,15 +51,17 @@ window.
    reports true payload sizes. Known limit: budgets are per-observation
    only; the aggregate prompt still grows linearly with rounds × budget.
 5. **Tripwire + audit.** A cheap case-insensitive phrase scanner runs over
-   each observation's exact prompt rendering (the same bytes the model is
-   shown), in every phase: `investigate()`, `plan()` (including
-   caller-supplied observations), and `execute_plan()` results. Hits emit
-   a `warn!` and a new hash-chained `SuspectedPromptInjection` audit
-   event. It's a detector, not a filter: data is still passed (fenced) so
-   the model sees real system state. The pattern list is deliberately
-   high-precision — generic phrases that routinely appear in benign system
-   output are excluded, because a noisy alarm trains operators to ignore
-   the audit trail.
+   each observation's **full rendered payload** — a superset of the
+   budget-truncated prefix any prompt embeds, so a hit may flag an attempt
+   past the truncation point that the model never saw; recording the
+   attempt is the point of a tripwire — in every phase: `investigate()`,
+   `plan()` (including caller-supplied observations), and `execute_plan()`
+   results. Hits emit a `warn!` and a new hash-chained
+   `SuspectedPromptInjection` audit event. It's a detector, not a filter:
+   data is still passed (fenced) so the model sees real system state. The
+   pattern list is deliberately high-precision — generic phrases that
+   routinely appear in benign system output are excluded, because a noisy
+   alarm trains operators to ignore the audit trail.
 
 ## Consequences
 

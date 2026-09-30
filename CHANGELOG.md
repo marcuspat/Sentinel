@@ -12,9 +12,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   fences neutralised, and both system prompts tell the model that fenced
   content is data, never instructions. Byte budgets apply to the raw payload
   (neutralisation runs after truncation, so padding can't evict real data).
-  A heuristic tripwire scans the exact rendered bytes of observations and
-  execution results across all phases (investigate, plan, execute); hits are
-  logged and written to the hash-chained audit log as a new
+  A heuristic tripwire scans the full rendered payload of observations and
+  execution results across all phases (investigate, plan, execute) — a
+  superset of the truncated prefix prompts embed; hits are logged and
+  written to the hash-chained audit log as a new
   `SuspectedPromptInjection` event
 
 ### Fixed

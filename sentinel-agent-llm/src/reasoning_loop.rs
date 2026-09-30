@@ -369,9 +369,12 @@ impl ReasoningLoop {
     /// Record a `SuspectedPromptInjection` audit event when rendered
     /// capability output matches injection heuristics.
     ///
-    /// `rendered` must be the exact text the prompt embeds (see
-    /// [`PromptBuilder::capability_result_payload`]) so the audit trail
-    /// reflects the bytes the model was shown.
+    /// `rendered` is the full rendered payload (see
+    /// [`PromptBuilder::capability_result_payload`]). Prompts embed only a
+    /// budget-truncated prefix of it, so this scan is a **superset** of
+    /// what the model sees: a hit may flag an attempt past the truncation
+    /// point that never reached the model. Recording the attempt is the
+    /// point of a tripwire.
     async fn tripwire(&self, capability_id: &str, rendered: &str) -> Result<(), AgentError> {
         let hits = detect_injection_markers(rendered);
         if hits.is_empty() {
@@ -388,9 +391,7 @@ impl ReasoningLoop {
             patterns: hits.iter().map(|s| s.to_string()).collect(),
         })
         .await
-        .map_err(|e| {
-            AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string()))
-        })?;
+        .map_err(|e| AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string())))?;
         Ok(())
     }
 
@@ -1275,6 +1276,61 @@ mod tests {
             "injection attempt must be recorded in the audit log"
         );
         assert!(log.verify_chain().valid);
+    }
+
+    #[tokio::test]
+    async fn execute_plan_audits_injections_in_results() {
+        let session_id = Uuid::new_v4();
+        let registry = make_registry();
+        let audit_log = make_audit_log(session_id);
+        let hostile = HostileCapability {
+            manifest: registry.get("disk_usage").unwrap().clone(),
+        };
+
+        let backend = MockBackend::new(vec![]);
+
+        let loop_ = ReasoningLoop::new(
+            Box::new(backend),
+            registry,
+            make_allow_all_evaluator(),
+            audit_log.clone(),
+            make_config(),
+        )
+        .with_capabilities(vec![Box::new(hostile)]);
+
+        let mut plan = Plan::new(session_id, "fix disk".into(), "rationale".into());
+        plan.add_step(sentinel_core::PlanStep::new(
+            0,
+            "disk_usage",
+            serde_json::json!({}),
+            "Check disk",
+            RiskTier::Low,
+        ));
+        plan.approve();
+
+        let summary = loop_
+            .execute_plan(
+                session_id,
+                "localhost",
+                &mut plan,
+                ApprovalDecision::FullApproval,
+            )
+            .await
+            .unwrap();
+        assert_eq!(summary.steps_completed, 1);
+
+        let log = audit_log.lock().await;
+        let flagged = log.events().iter().any(|e| {
+            matches!(
+                &e.event_type,
+                AuditEventType::SuspectedPromptInjection { capability_id, .. }
+                    if capability_id == "disk_usage"
+            )
+        });
+        assert!(
+            flagged,
+            "execute_plan() must audit injections in capability results"
+        );
     }
 
     #[tokio::test]

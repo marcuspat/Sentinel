@@ -228,10 +228,7 @@ mod tests {
         // The trailer counts raw payload bytes, not post-escape length.
         let content = format!("{} tail", FENCE_MARKER.repeat(500));
         let out = spotlight("x", &content, 1_000);
-        assert!(out.contains(&format!(
-            "of {} bytes shown",
-            content.len()
-        )));
+        assert!(out.contains(&format!("of {} bytes shown", content.len())));
     }
 
     #[test]

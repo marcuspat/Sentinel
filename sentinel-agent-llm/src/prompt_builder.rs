@@ -255,10 +255,11 @@ If not, request the next capability invocation:
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
-    /// Raw (untrusted) payload text for a capability result — exactly the
-    /// text `spotlight()` embeds into prompts. The prompt-injection tripwire
-    /// must scan this same rendering so the audit trail reflects the bytes
-    /// the model was actually shown.
+    /// Rendered (untrusted) payload text for a capability result — the text
+    /// `spotlight()` neutralises and budget-truncates before embedding it
+    /// into prompts. The prompt-injection tripwire scans this full payload,
+    /// a superset of the truncated prefix any prompt embeds, so audit
+    /// events can flag attempts the model never saw.
     pub fn capability_result_payload(result: &sentinel_core::CapabilityResult) -> String {
         match result {
             sentinel_core::CapabilityResult::Success { output } => {
