@@ -90,6 +90,68 @@ cargo build --release --target x86_64-unknown-linux-musl
 | `sentinel capabilities` | List all built-in capabilities |
 | `sentinel policy` | Show default policy rules |
 | `sentinel verify-audit PATH` | Verify audit log chain integrity |
+| `sentinel serve --mcp [--state-dir DIR] [--host HOST]` | Run as an MCP policy gate for coding agents (stdio) |
+| `sentinel plans` / `sentinel show-plan ID` | List / inspect plans proposed through the gate |
+| `sentinel approve ID` | Operator approval of a proposed plan (interactive terminal required) |
+| `sentinel reject ID [--reason TEXT]` | Reject a proposed plan |
+| `sentinel execute ID` | Execute an approved plan; refuses unapproved or modified plans |
+
+## Policy gate for coding agents (MCP)
+
+`sentinel serve --mcp` exposes Sentinel's capability catalogue, deny-by-default
+policy engine and hash-chained audit log to any MCP client (Claude Code,
+Cursor, …) over stdio. The agent can **ask** and **propose**; it cannot
+**approve** or **execute**:
+
+| Tool | What it does | Touches the host? |
+|---|---|---|
+| `sentinel_capabilities` | List capabilities with kind and risk tier | No |
+| `sentinel_policy_check` | Dry-run a policy decision; returns allow/deny/require_approval + matching rule | No |
+| `sentinel_investigate` | Run one **read-only** capability after a policy check | Read-only |
+| `sentinel_propose_plan` | Validate + store a plan as `PendingApproval`, return `plan_id` | Writes the plan store only |
+| `sentinel_plan_status` | Read a stored plan's status | No |
+
+There is no approve or execute tool. An operator reviews the plan and runs
+`sentinel approve <plan_id>` (interactive terminal required) and then
+`sentinel execute <plan_id>`. Execution re-evaluates policy per step and
+refuses any plan whose content changed after approval. Every MCP call, policy
+decision, approval and capability invocation is written to a per-process
+hash-chained JSONL log under `<state-dir>/audit/`, verifiable with
+`sentinel verify-audit`.
+
+Claude Code — project `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "sentinel": {
+      "type": "stdio",
+      "command": "sentinel",
+      "args": ["serve", "--mcp"],
+      "env": { "SENTINEL_STATE_DIR": "/var/lib/sentinel" }
+    }
+  }
+}
+```
+
+If the agent also has a shell, deny it the operator commands in
+`.claude/settings.json` as defence in depth:
+
+```json
+{
+  "permissions": {
+    "deny": ["Bash(sentinel approve:*)", "Bash(sentinel execute:*)"]
+  }
+}
+```
+
+The TTY check on `approve` and these deny rules are speed bumps, not a
+security boundary: a process running as the same OS user can allocate a
+pseudo-terminal or edit the state directory. For a hard boundary, run the gate
+and own the state directory as a separate user. See
+[ADR-013](docs/adr/ADR-013-mcp-policy-gate.md) for the threat model and
+[plans/SPEC-mcp-gate-and-arena.md](plans/SPEC-mcp-gate-and-arena.md) for the
+roadmap.
 
 ## Architecture
 
@@ -102,6 +164,7 @@ sentinel-capabilities  — 14 concrete capabilities (fs, process, packages, net,
 sentinel-agent-llm     — Investigate/Plan/Act reasoning loop, LLM backends
 sentinel-fleet         — mTLS fleet management, staged rollouts
 sentinel-tui           — ratatui TUI: 5 tabs, approval workflow, clap CLI
+sentinel-mcp           — MCP stdio policy gate: tools, plan store, approved-plan executor
 ```
 
 ## Security Model

@@ -31,6 +31,8 @@ use sentinel_tui::{
     ui,
 };
 
+mod gate_cmd;
+
 #[derive(Parser)]
 #[command(name = "sentinel", version, about = "Agentic system administration tool")]
 struct Cli {
@@ -107,14 +109,65 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Serve Sentinel as a policy gate for coding agents (MCP over stdio)
+    Serve {
+        /// Speak the Model Context Protocol over stdin/stdout
+        #[arg(long)]
+        mcp: bool,
+        /// Plan store + audit log directory
+        #[arg(long, env = "SENTINEL_STATE_DIR")]
+        state_dir: Option<std::path::PathBuf>,
+        /// Host label used for policy evaluation and execution context
+        #[arg(long, default_value = "localhost")]
+        host: String,
+    },
+    /// List plans proposed through the MCP gate
+    Plans {
+        #[arg(long, env = "SENTINEL_STATE_DIR")]
+        state_dir: Option<std::path::PathBuf>,
+    },
+    /// Show one stored plan as JSON
+    ShowPlan {
+        plan_id: Uuid,
+        #[arg(long, env = "SENTINEL_STATE_DIR")]
+        state_dir: Option<std::path::PathBuf>,
+    },
+    /// Approve a proposed plan (operator only; requires an interactive terminal)
+    Approve {
+        plan_id: Uuid,
+        #[arg(long, env = "SENTINEL_STATE_DIR")]
+        state_dir: Option<std::path::PathBuf>,
+    },
+    /// Reject a proposed plan
+    Reject {
+        plan_id: Uuid,
+        /// Reason recorded in the plan store and audit log
+        #[arg(long, default_value = "rejected by operator")]
+        reason: String,
+        #[arg(long, env = "SENTINEL_STATE_DIR")]
+        state_dir: Option<std::path::PathBuf>,
+    },
+    /// Execute an approved plan (refuses anything not approved or modified since approval)
+    Execute {
+        plan_id: Uuid,
+        #[arg(long, env = "SENTINEL_STATE_DIR")]
+        state_dir: Option<std::path::PathBuf>,
+        /// Per-step timeout in milliseconds
+        #[arg(long, default_value_t = 60_000)]
+        step_timeout_ms: u64,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Logs always go to stderr: stdout is reserved for command output and,
+    // under `serve --mcp`, for the JSON-RPC stream.
     fmt()
         .with_env_filter(EnvFilter::new(&cli.log_level))
+        .with_writer(io::stderr)
+        .with_ansi(io::IsTerminal::is_terminal(&io::stderr()))
         .init();
 
     match cli.command.unwrap_or(Commands::Tui {
@@ -133,6 +186,24 @@ async fn main() -> Result<()> {
             .await?
         }
         Commands::Capabilities => list_capabilities(),
+        Commands::Serve {
+            mcp,
+            state_dir,
+            host,
+        } => gate_cmd::serve(mcp, state_dir, host).await?,
+        Commands::Plans { state_dir } => gate_cmd::list_plans(state_dir)?,
+        Commands::ShowPlan { plan_id, state_dir } => gate_cmd::show_plan(plan_id, state_dir)?,
+        Commands::Approve { plan_id, state_dir } => gate_cmd::approve(plan_id, state_dir).await?,
+        Commands::Reject {
+            plan_id,
+            reason,
+            state_dir,
+        } => gate_cmd::reject(plan_id, reason, state_dir).await?,
+        Commands::Execute {
+            plan_id,
+            state_dir,
+            step_timeout_ms,
+        } => gate_cmd::execute(plan_id, state_dir, step_timeout_ms).await?,
         Commands::Policy => show_policy(),
         Commands::VerifyAudit { path } => verify_audit(&path)?,
         Commands::Fleet {
