@@ -221,6 +221,78 @@ pub const BUILTIN_COMMANDS: &[&str] = &[
     "yum",
 ];
 
+/// The only allowlisted programs that keep Internet access: package managers
+/// fetch from mirrors.  Every other command runs with `AF_INET`, `AF_INET6`
+/// and `AF_PACKET` sockets denied.  `ifconfig` and `netstat` open an inet
+/// socket purely for local ioctls, so they are exempt too.
+pub const NETWORK_COMMANDS: &[&str] = &[
+    "apt", "apt-get", "dnf", "ifconfig", "netstat", "pacman", "yum",
+];
+
+/// `PATH` given to every child.  Allowlisted names are resolved against this,
+/// never against the `PATH` Sentinel itself was started with.
+pub const SAFE_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+/// Variables copied from Sentinel's environment into network-capable
+/// children, so package managers keep working behind a proxy.
+const PROXY_VARS: &[&str] = &[
+    "http_proxy",
+    "https_proxy",
+    "ftp_proxy",
+    "no_proxy",
+    "all_proxy",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "FTP_PROXY",
+    "NO_PROXY",
+    "ALL_PROXY",
+];
+
+/// Whether a caller-supplied environment variable may reach a child.
+///
+/// Rejects everything that changes which code the child loads or how it
+/// resolves names: the dynamic loader (`LD_*`), `PATH`, shell start-up files,
+/// locale/charset module paths and interpreter search paths.
+pub fn env_override_allowed(name: &str) -> bool {
+    const EXACT: &[&str] = &[
+        "PATH",
+        "IFS",
+        "ENV",
+        "BASH_ENV",
+        "SHELLOPTS",
+        "BASHOPTS",
+        "CDPATH",
+        "GLOBIGNORE",
+        "PS4",
+        "GCONV_PATH",
+        "LOCPATH",
+        "NLSPATH",
+        "HOSTALIASES",
+        "LOCALDOMAIN",
+        "RESOLV_HOST_CONF",
+        "RES_OPTIONS",
+        "TMPDIR",
+        "MALLOC_TRACE",
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "PYTHONSTARTUP",
+        "PERL5LIB",
+        "PERLLIB",
+        "PERL5OPT",
+        "RUBYLIB",
+        "RUBYOPT",
+        "NODE_OPTIONS",
+        "NODE_PATH",
+    ];
+    !(name.is_empty()
+        || name.contains('=')
+        || name.contains('\0')
+        || name.starts_with("LD_")
+        || name.starts_with("DYLD_")
+        || name.starts_with("BASH_FUNC_")
+        || EXACT.contains(&name))
+}
+
 /// Default wall-clock budget for one command under [`HardenedExecutor`].
 /// Generous because a full package upgrade is a legitimate long-running step.
 pub const HARDENED_DEFAULT_TIMEOUT_MS: u64 = 15 * 60 * 1000;
@@ -354,16 +426,44 @@ impl HardenedExecutor {
             return Err(ExecError::NotAllowed(program.to_string()));
         }
 
+        let network = NETWORK_COMMANDS.contains(&program);
+
         let mut cmd = Command::new(program);
         cmd.args(args)
-            .envs(env)
+            // Nothing is inherited: the child gets a fixed PATH and locale,
+            // so `rm` means the system `rm` whatever Sentinel was started
+            // with, and output is in the C locale the parsers expect.
+            .env_clear()
+            .env("PATH", SAFE_PATH)
+            .env("LC_ALL", "C")
+            .env("LANG", "C")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .stdin(std::process::Stdio::null())
             // If the caller's future is dropped (step timeout, cancelled
             // session) the child must not keep running.
             .kill_on_drop(true);
+        if network {
+            cmd.env("DEBIAN_FRONTEND", "noninteractive");
+            for name in PROXY_VARS {
+                if let Some(value) = std::env::var_os(name) {
+                    cmd.env(name, value);
+                }
+            }
+        }
+        for (name, value) in env {
+            if env_override_allowed(name) {
+                cmd.env(name, value);
+            } else {
+                warn!(program, name, "environment override refused");
+            }
+        }
 
+        let mut sandbox = sandbox.clone();
+        if !network && self.landlock != LandlockMode::Off {
+            sandbox.deny_network = true;
+        }
+        let sandbox = &sandbox;
         apply_sandbox(&mut cmd, sandbox)?;
 
         let mut child = cmd
@@ -1146,6 +1246,160 @@ mod tests {
             for forbidden in ["/", "/etc", "/usr", "/boot", "/home", "/root", "/bin"] {
                 assert!(!paths.contains(&PathBuf::from(forbidden)), "{forbidden}");
             }
+        }
+    }
+
+    // ── Environment scrubbing and network policy ─────────────────────────────
+
+    async fn child_environ(exec: &HardenedExecutor, env: &HashMap<String, String>) -> String {
+        let out = exec
+            .run("cat", &["/proc/self/environ"], env, 64 * 1024)
+            .await
+            .unwrap();
+        assert!(out.success(), "{}", out.stderr);
+        out.stdout.replace('\0', "\n")
+    }
+
+    #[tokio::test]
+    async fn child_environment_is_not_inherited() {
+        // `cargo test` exports CARGO_* into this process; none may leak.
+        assert!(std::env::vars().any(|(k, _)| k.starts_with("CARGO")));
+        let exec = HardenedExecutor::for_builtin_capabilities();
+        let environ = child_environ(&exec, &HashMap::new()).await;
+        let names: Vec<&str> = environ
+            .lines()
+            .filter_map(|l| l.split('=').next())
+            .filter(|n| !n.is_empty())
+            .collect();
+        assert_eq!(names, ["LANG", "LC_ALL", "PATH"].to_vec(), "{environ}");
+        assert!(environ.contains(&format!("PATH={SAFE_PATH}")));
+    }
+
+    #[tokio::test]
+    async fn dangerous_overrides_are_dropped_and_safe_ones_kept() {
+        let exec = HardenedExecutor::for_builtin_capabilities();
+        let mut env = HashMap::new();
+        env.insert("PATH".to_string(), "/tmp/evil".to_string());
+        env.insert("LD_PRELOAD".to_string(), "/tmp/evil.so".to_string());
+        env.insert("LD_LIBRARY_PATH".to_string(), "/tmp".to_string());
+        env.insert("BASH_ENV".to_string(), "/tmp/rc".to_string());
+        env.insert("SENTINEL_SESSION".to_string(), "abc".to_string());
+        let environ = child_environ(&exec, &env).await;
+        assert!(environ.contains("SENTINEL_SESSION=abc"));
+        assert!(environ.contains(&format!("PATH={SAFE_PATH}")));
+        assert!(!environ.contains("/tmp/evil"), "{environ}");
+        assert!(!environ.contains("LD_"), "{environ}");
+        assert!(!environ.contains("BASH_ENV"), "{environ}");
+    }
+
+    /// A caller cannot make an allowlisted name resolve to its own binary.
+    #[tokio::test]
+    async fn path_override_cannot_hijack_an_allowlisted_command() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("hijacked");
+        let fake = dir.path().join("cat");
+        std::fs::write(&fake, format!("#!/bin/sh\ntouch {}\n", marker.display())).unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut env = HashMap::new();
+        env.insert("PATH".to_string(), dir.path().display().to_string());
+        let exec = HardenedExecutor::for_builtin_capabilities();
+        let out = exec
+            .run("cat", &["/proc/uptime"], &env, 4096)
+            .await
+            .unwrap();
+        assert!(out.success());
+        assert!(!marker.exists(), "the fake cat ran");
+    }
+
+    #[test]
+    fn env_override_filter() {
+        for bad in [
+            "PATH",
+            "LD_PRELOAD",
+            "LD_AUDIT",
+            "DYLD_INSERT_LIBRARIES",
+            "IFS",
+            "BASH_ENV",
+            "ENV",
+            "GCONV_PATH",
+            "PYTHONPATH",
+            "NODE_OPTIONS",
+            "BASH_FUNC_ls%%",
+            "",
+            "A=B",
+        ] {
+            assert!(!env_override_allowed(bad), "{bad}");
+        }
+        for ok in [
+            "SENTINEL_SESSION",
+            "LC_ALL",
+            "TZ",
+            "SYSTEMD_PAGER",
+            "NO_COLOR",
+        ] {
+            assert!(env_override_allowed(ok), "{ok}");
+        }
+    }
+
+    #[tokio::test]
+    async fn non_network_commands_run_with_inet_sockets_denied() {
+        let cfg = SandboxConfig {
+            deny_network: true,
+            ..Default::default()
+        };
+        let mut probe = Command::new("true");
+        if !apply_sandbox(&mut probe, &cfg).unwrap().network_denied {
+            eprintln!("SKIPPED: seccomp network filter unavailable on this target");
+            return;
+        }
+        // Seccomp mode 2 = a filter is installed.
+        let seccomp_mode = |status: &str| {
+            status
+                .lines()
+                .find(|l| l.starts_with("Seccomp:"))
+                .map(|l| l.split_whitespace().last().unwrap().to_string())
+                .expect("Seccomp line")
+        };
+        let confined = HardenedExecutor::new(["cat"], 10_000, SandboxConfig::default());
+        let out = confined
+            .run("cat", &["/proc/self/status"], &HashMap::new(), 64 * 1024)
+            .await
+            .unwrap();
+        assert_eq!(seccomp_mode(&out.stdout), "2");
+
+        // Off is the escape hatch for the whole confinement layer.
+        let off = confined.clone().with_landlock_mode(LandlockMode::Off);
+        let out = off
+            .run("cat", &["/proc/self/status"], &HashMap::new(), 64 * 1024)
+            .await
+            .unwrap();
+        assert_eq!(seccomp_mode(&out.stdout), "0");
+    }
+
+    #[test]
+    fn network_commands_are_a_subset_of_the_allowlist() {
+        for cmd in NETWORK_COMMANDS {
+            assert!(BUILTIN_COMMANDS.contains(cmd), "{cmd}");
+        }
+        for cmd in [
+            "rm",
+            "find",
+            "cat",
+            "kill",
+            "systemctl",
+            "ps",
+            "df",
+            "du",
+            "which",
+            "ss",
+            "ip",
+        ] {
+            assert!(
+                !NETWORK_COMMANDS.contains(&cmd),
+                "{cmd} must not have network"
+            );
         }
     }
 }

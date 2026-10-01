@@ -27,7 +27,7 @@ pub use error::ExecError;
 pub use executor::{
     CommandExecutor, CommandExecutorTrait, CommandOutput, DryRunResult, ExecutionResult,
     ExecutorConfig, FsAccess, HardenedExecutor, LandlockMode, RealCommandExecutor,
-    BUILTIN_COMMANDS,
+    BUILTIN_COMMANDS, NETWORK_COMMANDS, SAFE_PATH,
 };
 pub use output_capture::OutputCapture;
 pub use sandbox::{apply_sandbox, SandboxConfig, SandboxReport};

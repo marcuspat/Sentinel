@@ -34,8 +34,9 @@ pub struct SandboxConfig {
     /// Paths (files or directory trees) the child may read, write, create
     /// and delete under.  Kernel-enforced with Landlock.
     pub writable_paths: Vec<PathBuf>,
-    /// NOT enforced yet — requires Landlock network rules or seccomp BPF;
-    /// setting this field emits a warning.
+    /// Deny Internet and raw-packet sockets (`AF_INET`, `AF_INET6`,
+    /// `AF_PACKET`) with a seccomp filter.  Unix and netlink sockets keep
+    /// working.  Enforced on Linux x86_64 and aarch64.
     pub deny_network: bool,
     /// If `true`, `RLIMIT_NPROC` is set to 64 to prevent fork bombs.
     pub deny_new_processes: bool,
@@ -88,6 +89,8 @@ pub struct SandboxReport {
     pub filesystem_enforced: bool,
     /// `PR_SET_NO_NEW_PRIVS` will be set on this child.
     pub no_new_privs: bool,
+    /// Internet sockets are denied to this child by a seccomp filter.
+    pub network_denied: bool,
 }
 
 /// Apply sandbox constraints to a `tokio::process::Command` before spawning.
@@ -102,13 +105,6 @@ pub fn apply_sandbox(
     cmd: &mut Command,
     config: &SandboxConfig,
 ) -> Result<SandboxReport, ExecError> {
-    if config.deny_network {
-        warn!(
-            "deny_network is set but NOT enforced; \
-             network isolation requires Landlock network rules or seccomp BPF"
-        );
-    }
-
     let mut report = SandboxReport {
         landlock_abi: landlock::abi(),
         ..Default::default()
@@ -135,13 +131,31 @@ pub fn apply_sandbox(
         None
     };
 
-    let no_new_privs = config.no_new_privs || ruleset.is_some();
+    let net_filter: Option<Arc<seccomp::Filter>> = if config.deny_network {
+        match seccomp::deny_inet_filter() {
+            Ok(filter) => {
+                report.network_denied = true;
+                Some(Arc::new(filter))
+            }
+            Err(reason) if config.require_enforcement => {
+                return Err(ExecError::SandboxUnavailable(reason));
+            }
+            Err(reason) => {
+                warn!(%reason, "deny_network requested but NOT enforced; the child keeps network access");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let no_new_privs = config.no_new_privs || ruleset.is_some() || net_filter.is_some();
     report.no_new_privs = no_new_privs && cfg!(target_os = "linux");
     let deny_new_processes = config.deny_new_processes;
 
     // SAFETY: pre_exec runs after fork(), before execve().  Only
-    // async-signal-safe operations are performed: raw prctl, setrlimit and
-    // landlock_restrict_self syscalls.  No allocation, no locks.  The ruleset
+    // async-signal-safe operations are performed: raw prctl (no_new_privs,
+    // seccomp), setrlimit and landlock_restrict_self syscalls.  No allocation, no locks.  The ruleset
     // fd was created in the parent and is merely read here.
     unsafe {
         cmd.pre_exec(move || {
@@ -163,6 +177,18 @@ pub fn apply_sandbox(
                     return Err(std::io::Error::last_os_error());
                 }
 
+                // Needs no_new_privs (set above) for unprivileged callers.
+                if let Some(filter) = net_filter.as_ref() {
+                    if libc::prctl(
+                        libc::PR_SET_SECCOMP,
+                        libc::SECCOMP_MODE_FILTER,
+                        filter.as_fprog_ptr(),
+                    ) != 0
+                    {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+
                 // Last: after this the child can only touch allowed paths, so
                 // a failure here must abort the spawn rather than run
                 // unconfined.
@@ -173,7 +199,7 @@ pub fn apply_sandbox(
                 }
             }
             #[cfg(not(target_os = "linux"))]
-            let _ = (&ruleset, no_new_privs);
+            let _ = (&ruleset, &net_filter, no_new_privs);
 
             Ok(())
         });
@@ -335,6 +361,132 @@ mod landlock {
             add_rule(&ruleset, path, handled)?;
         }
         Ok(ruleset)
+    }
+}
+
+/// A minimal seccomp-BPF filter that denies creating Internet sockets.
+///
+/// Classic BPF over `struct seccomp_data { nr, arch, ip, args[6] }`.  The
+/// program is assembled in the parent; the child only hands the kernel a
+/// pointer to it.
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+mod seccomp {
+    const LD_W_ABS: u16 = 0x20; // BPF_LD | BPF_W | BPF_ABS
+    const JEQ_K: u16 = 0x15; // BPF_JMP | BPF_JEQ | BPF_K
+    const JGE_K: u16 = 0x35; // BPF_JMP | BPF_JGE | BPF_K
+    const RET_K: u16 = 0x06; // BPF_RET | BPF_K
+
+    const OFF_NR: u32 = 0;
+    const OFF_ARCH: u32 = 4;
+    const OFF_ARG0: u32 = 16; // low 32 bits; both supported targets are little-endian
+
+    const RET_ALLOW: u32 = 0x7fff_0000;
+    const RET_KILL_PROCESS: u32 = 0x8000_0000;
+    const RET_ERRNO: u32 = 0x0005_0000;
+
+    #[cfg(target_arch = "x86_64")]
+    const AUDIT_ARCH: u32 = 0xC000_003E;
+    #[cfg(target_arch = "aarch64")]
+    const AUDIT_ARCH: u32 = 0xC000_00B7;
+
+    /// x32 syscalls carry this bit on x86_64; no aarch64 syscall is this high.
+    const X32_SYSCALL_BIT: u32 = 0x4000_0000;
+
+    pub struct Filter {
+        // Boxed so the address handed to the kernel stays put.
+        _insns: Box<[libc::sock_filter]>,
+        prog: libc::sock_fprog,
+    }
+
+    // SAFETY: the raw pointer in `prog` refers to `_insns`, which is owned by
+    // the same value and never mutated after construction.
+    unsafe impl Send for Filter {}
+    unsafe impl Sync for Filter {}
+
+    impl Filter {
+        pub fn as_fprog_ptr(&self) -> *const libc::sock_fprog {
+            &self.prog
+        }
+
+        #[cfg(test)]
+        pub fn len(&self) -> usize {
+            self.prog.len as usize
+        }
+    }
+
+    const fn stmt(code: u16, k: u32) -> libc::sock_filter {
+        libc::sock_filter {
+            code,
+            jt: 0,
+            jf: 0,
+            k,
+        }
+    }
+
+    const fn jump(code: u16, k: u32, jt: u8, jf: u8) -> libc::sock_filter {
+        libc::sock_filter { code, jt, jf, k }
+    }
+
+    /// Deny `socket(AF_INET | AF_INET6 | AF_PACKET, …)` with `EACCES`, and
+    /// `io_uring_setup` with `ENOSYS` (io_uring can open sockets without
+    /// passing through the `socket` syscall).  Everything else is allowed.
+    pub fn deny_inet_filter() -> Result<Filter, String> {
+        // SAFETY: PR_GET_SECCOMP takes no pointers; it fails with EINVAL on
+        // kernels built without seccomp.
+        if unsafe { libc::prctl(libc::PR_GET_SECCOMP) } < 0 {
+            return Err("this kernel does not support seccomp".into());
+        }
+
+        let eacces = RET_ERRNO | libc::EACCES as u32;
+        let enosys = RET_ERRNO | libc::ENOSYS as u32;
+        // Jump offsets are relative to the next instruction.
+        let insns: Box<[libc::sock_filter]> = Box::new([
+            /*  0 */ stmt(LD_W_ABS, OFF_ARCH),
+            /*  1 */ jump(JEQ_K, AUDIT_ARCH, 1, 0),
+            /*  2 */ stmt(RET_K, RET_KILL_PROCESS), // foreign-ABI syscall
+            /*  3 */ stmt(LD_W_ABS, OFF_NR),
+            /*  4 */ jump(JGE_K, X32_SYSCALL_BIT, 8, 0), // → 13
+            /*  5 */ jump(JEQ_K, libc::SYS_io_uring_setup as u32, 7, 0), // → 13
+            /*  6 */ jump(JEQ_K, libc::SYS_socket as u32, 0, 4), // else → 11
+            /*  7 */ stmt(LD_W_ABS, OFF_ARG0),
+            /*  8 */ jump(JEQ_K, libc::AF_INET as u32, 3, 0), // → 12
+            /*  9 */ jump(JEQ_K, libc::AF_INET6 as u32, 2, 0), // → 12
+            /* 10 */ jump(JEQ_K, libc::AF_PACKET as u32, 1, 0), // → 12
+            /* 11 */ stmt(RET_K, RET_ALLOW),
+            /* 12 */ stmt(RET_K, eacces),
+            /* 13 */ stmt(RET_K, enosys),
+        ]);
+        let prog = libc::sock_fprog {
+            len: insns.len() as libc::c_ushort,
+            filter: insns.as_ptr() as *mut libc::sock_filter,
+        };
+        Ok(Filter {
+            _insns: insns,
+            prog,
+        })
+    }
+}
+
+/// Stand-in for targets without the seccomp filter above.
+#[cfg(not(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+)))]
+mod seccomp {
+    pub struct Filter;
+
+    impl Filter {
+        #[allow(dead_code)]
+        pub fn as_fprog_ptr(&self) -> *const std::ffi::c_void {
+            std::ptr::null()
+        }
+    }
+
+    pub fn deny_inet_filter() -> Result<Filter, String> {
+        Err("network denial needs Linux on x86_64 or aarch64".into())
     }
 }
 
@@ -561,5 +713,91 @@ mod tests {
         let target = dir.path().join("f");
         let (ok, _, _) = sh(&cfg, &format!("echo x > {}", target.display())).await;
         assert!(!ok);
+    }
+
+    #[tokio::test]
+    async fn deny_network_blocks_inet_sockets_but_not_unix_or_netlink() {
+        let cfg = SandboxConfig {
+            deny_network: true,
+            ..Default::default()
+        };
+        let mut probe = Command::new("true");
+        let report = apply_sandbox(&mut probe, &cfg).unwrap();
+        if !report.network_denied {
+            eprintln!("SKIPPED: seccomp network filter unavailable on this target");
+            return;
+        }
+        assert!(report.no_new_privs, "seccomp implies no_new_privs");
+
+        // python3 is the most portable way to ask for specific socket
+        // families; skip quietly where it is missing.
+        let have_python = std::process::Command::new("python3")
+            .arg("-c")
+            .arg("pass")
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !have_python {
+            eprintln!("SKIPPED: python3 not installed");
+            return;
+        }
+        let py = |code: &'static str| {
+            let cfg = cfg.clone();
+            async move {
+                let mut cmd = Command::new("python3");
+                cmd.arg("-c")
+                    .arg(code)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
+                apply_sandbox(&mut cmd, &cfg).unwrap();
+                let out = cmd.output().await.unwrap();
+                String::from_utf8_lossy(&out.stdout).trim().to_string()
+            }
+        };
+
+        let probe_family = |family: &'static str| {
+            match family {
+            "inet" => "import socket\ntry:\n socket.socket(socket.AF_INET, socket.SOCK_STREAM); print('ok')\nexcept OSError as e: print(e.errno)",
+            "inet_udp" => "import socket\ntry:\n socket.socket(socket.AF_INET, socket.SOCK_DGRAM); print('ok')\nexcept OSError as e: print(e.errno)",
+            "inet6" => "import socket\ntry:\n socket.socket(socket.AF_INET6, socket.SOCK_STREAM); print('ok')\nexcept OSError as e: print(e.errno)",
+            "unix" => "import socket\ntry:\n socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); print('ok')\nexcept OSError as e: print(e.errno)",
+            _ => "import socket\ntry:\n socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, 0); print('ok')\nexcept OSError as e: print(e.errno)",
+        }
+        };
+
+        let eacces = libc::EACCES.to_string();
+        assert_eq!(py(probe_family("inet")).await, eacces);
+        assert_eq!(
+            py(probe_family("inet_udp")).await,
+            eacces,
+            "UDP is covered too"
+        );
+        assert_eq!(py(probe_family("inet6")).await, eacces);
+        assert_eq!(py(probe_family("unix")).await, "ok");
+        assert_eq!(
+            py(probe_family("netlink")).await,
+            "ok",
+            "ss/ip need netlink"
+        );
+    }
+
+    #[tokio::test]
+    async fn network_is_untouched_without_deny_network() {
+        let mut cmd = Command::new("true");
+        let report = apply_sandbox(&mut cmd, &SandboxConfig::default()).unwrap();
+        assert!(!report.network_denied);
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[test]
+    fn seccomp_filter_jump_targets_stay_in_bounds() {
+        // A wrong offset would be rejected by the kernel at install time and
+        // fail every spawn; catch it here with a readable message.
+        let filter = seccomp::deny_inet_filter().unwrap();
+        assert_eq!(filter.len(), 14);
     }
 }

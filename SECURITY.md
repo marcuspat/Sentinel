@@ -52,6 +52,11 @@ Every production path runs commands through `HardenedExecutor` (ADR-016):
 - **rlimits**: file descriptors (256), core dumps disabled.
 - **`no_new_privs`**: children cannot gain privilege via setuid/setgid binaries or file
   capabilities.
+- **Clean environment**: children inherit nothing. They get a fixed `PATH` and the C
+  locale, so allowlisted names always resolve to system binaries; `LD_*`, `PATH` and
+  similar overrides are refused.
+- **No network**: a seccomp filter denies Internet and raw sockets to every command except
+  the package managers (Linux x86_64 / aarch64).
 - **Landlock filesystem confinement** (Linux ≥ 5.13): each command a built-in capability
   spawns may write only where that capability needs to — nothing for read-only
   capabilities, the target directory for `log_vacuum` and `cache_prune`. `package_upgrade`
@@ -97,9 +102,9 @@ Every production path runs commands through `HardenedExecutor` (ADR-016):
 
 - Landlock confines writes only. It does not restrict reads, signals, or connections to
   existing Unix sockets, and on kernels without it the default is to warn, not refuse.
-- `deny_network` in `SandboxConfig` is not enforced. A warning is logged when it is set.
-- The child environment is inherited, and allowlisted program names are resolved through
-  `PATH`. Run Sentinel with a trusted `PATH`.
+- Network denial blocks socket families, not a network namespace: Unix-socket access to
+  local daemons remains.
+- The fixed child `PATH` assumes a conventional filesystem layout (not NixOS/Guix).
 - The TLS fingerprint comparison in `PinnedFingerprintVerifier` uses string equality on
   hex-encoded bytes. For use cases requiring constant-time comparison, replace with
   `subtle::ConstantTimeEq` on the raw digest bytes.

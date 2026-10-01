@@ -82,12 +82,8 @@ All four production call sites now use `HardenedExecutor::for_builtin_capabiliti
 | `no_new_privs` | No | Yes |
 | Child killed when its step is cancelled | No | Yes |
 | Landlock filesystem allowlist | Not implemented | Enforced per command for the built-in capabilities (see the amendment below) |
-| Network isolation (`deny_network`) | No | No (next roadmap item) |
-| Environment scrubbing / fixed `PATH` | No | No (next roadmap item) |
-
-Allowlisted program names are resolved through `PATH`. Until the environment
-is scrubbed, an attacker who controls Sentinel's `PATH` controls what `rm`
-means; `no_new_privs` and the allowlist do not help with that.
+| Network isolation (`deny_network`) | No | Yes, seccomp (second amendment) |
+| Environment scrubbing / fixed `PATH` | No | Yes (second amendment) |
 
 ## Amendment: per-capability profiles
 
@@ -124,6 +120,41 @@ This already paid for itself. `log_vacuum` split `find` output on newlines, so
 a crafted directory name could redirect its `rm -f` to any `*.log` path on the
 host. That is fixed at the source (NUL-separated output, prefix check), and
 the confined `rm` would have refused it regardless.
+
+## Amendment 2: network denial and environment scrubbing
+
+**Network.** `deny_network` installs a 14-instruction seccomp-BPF filter in the
+child: `socket()` with `AF_INET`, `AF_INET6` or `AF_PACKET` returns `EACCES`;
+`io_uring_setup` returns `ENOSYS` (io_uring can create sockets without the
+`socket` syscall); a syscall made through a foreign ABI kills the process.
+Unix and netlink sockets are untouched, so `systemctl`, `ss` and `ip` work.
+seccomp was chosen over Landlock's network rules because those cover TCP only
+and need ABI 4; the filter covers UDP and raw sockets on any kernel with
+seccomp. Supported on Linux x86_64 and aarch64; elsewhere the request is
+reported as unenforced and `require_enforcement` decides.
+
+`HardenedExecutor` applies it to every command not in `NETWORK_COMMANDS`
+(the package managers, plus `ifconfig` and `netstat`, which open an inet
+socket only for local ioctls). `SENTINEL_LANDLOCK=off` disables this together
+with the filesystem confinement.
+
+**Environment.** Children start from `env_clear()` with
+`PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
+`LC_ALL=C` and `LANG=C`. Package managers additionally get
+`DEBIAN_FRONTEND=noninteractive` and the proxy variables. Overrides from
+`ExecutionContext::env_overrides` pass through a filter that refuses `PATH`,
+`LD_*`, `DYLD_*`, shell start-up variables and interpreter search paths.
+
+Limits:
+
+- A denied socket family is not a network namespace. A confined command can
+  still talk to local daemons over Unix sockets, and a daemon may act on the
+  network for it.
+- The fixed `PATH` assumes a conventional layout. Distributions that keep
+  binaries elsewhere (NixOS, Guix) will see "No such file or directory" for
+  allowlisted commands; that needs a configurable search path, not yet built.
+- The C locale changes the language of tool output. That is intended (the
+  parsers expect it) but it is a behaviour change.
 
 ## Consequences
 

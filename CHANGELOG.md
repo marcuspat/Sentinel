@@ -7,6 +7,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Security
+- **Child processes no longer inherit Sentinel's environment (ADR-016).**
+  Allowlisted program names were resolved through whatever `PATH` Sentinel was
+  started with, so a poisoned `PATH` decided what `rm` or `systemctl` meant.
+  Children now start from an empty environment with a fixed `PATH`
+  (`/usr/local/sbin:…:/bin`) and `LC_ALL=C`; caller-supplied overrides that
+  change what code is loaded (`PATH`, `LD_*`, `BASH_ENV`, `PYTHONPATH`, …) are
+  refused. Proxy variables are passed only to package managers
+- **Network denial is enforced (ADR-016).** `deny_network` used to log a
+  warning and do nothing. It now installs a seccomp filter that denies
+  `AF_INET`, `AF_INET6` and `AF_PACKET` sockets (TCP and UDP) and
+  `io_uring_setup`, leaving Unix and netlink sockets working. Every built-in
+  command except the package managers (and `ifconfig`/`netstat`, which need an
+  inet socket for local ioctls) runs with it. Linux x86_64 and aarch64
 - **Arbitrary file deletion through `log_vacuum`.** The capability listed
   files with `find` and split the output on newlines. A directory named
   `evil\n` inside the log directory, holding a copy of some absolute path,
