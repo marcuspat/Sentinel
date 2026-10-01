@@ -55,7 +55,8 @@ jobs:
         run: |
           echo "::notice::$(rustc --version)"
           if [ -f clippy.log ]; then
-            grep -E '^[^ ].*: (error|warning)' clippy.log | head -9 | while IFS= read -r line; do
-              echo "::error::${line}"
-            done
+            sed -E 's/\x1B\[[0-9;]*[A-Za-z]//g' clippy.log \
+              | grep -E '(error|warning)(\[[A-Za-z0-9_:]+\])?:' \
+              | grep -v 'could not compile' | head -9 \
+              | while IFS= read -r line; do echo "::error::${line}"; done || true
           fi
