@@ -7,6 +7,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Security
+- **Arbitrary file deletion through `log_vacuum`.** The capability listed
+  files with `find` and split the output on newlines. A directory named
+  `evil\n` inside the log directory, holding a copy of some absolute path,
+  made the second line a path anywhere on the host, which was then passed to
+  `rm -f` with Sentinel's privileges. Any local user able to create files in a
+  vacuumed log directory could delete any file whose name ends in `.log`.
+  Output is now NUL-separated and every path must sit under `log_dir`
+- **Per-capability Landlock confinement (ADR-016).** Every command a built-in
+  capability spawns now states what it may write, and the kernel enforces it:
+  read-only capabilities can write nothing, `log_vacuum`'s `rm` only under its
+  `log_dir`, `cache_prune`'s `find -delete` only under the pruned path,
+  `systemctl` only under `/run`, package queries and cache cleaning only under
+  package-manager state directories. `package_upgrade` is deliberately
+  unconfined. `SENTINEL_LANDLOCK=require` refuses to run on kernels without
+  Landlock; `off` disables confinement; the default warns and continues
 - **Production now runs commands through the constrained executor (ADR-016).**
   The command allowlist, timeouts and rlimits described in `SECURITY.md` lived
   in `CommandExecutor`, but `sentinel run`, the TUI, `serve --mcp` and
@@ -20,8 +35,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   between `fork` and `execve` and inherited by all descendants.
   `SandboxConfig::write_restricted(paths)` gives "read anywhere, write only
   here". Kernels without Landlock either refuse to spawn or warn, per
-  `require_enforcement`. Implemented and tested, but not yet switched on for
-  the built-in capabilities: that needs per-capability profiles
+  `require_enforcement`
 - **Signed audit checkpoints (ADR-015).** The hash chain alone could not tell
   a genuine log from one rewritten wholesale: the hashes are unkeyed, so a
   forged but consistent chain verified as `VALID`. With `SENTINEL_AUDIT_KEY`

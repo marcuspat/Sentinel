@@ -7,7 +7,7 @@ use sentinel_core::{
     capability::ResourceImpact, Capability, CapabilityKind, CapabilityManifest, CapabilityResult,
     CoreError, ExecutionContext, RiskTier,
 };
-use sentinel_exec::CommandExecutorTrait;
+use sentinel_exec::{CommandExecutorTrait, FsAccess};
 
 // ─── NetworkConnections ──────────────────────────────────────────────────────
 
@@ -75,7 +75,13 @@ impl Capability for NetworkConnections {
 
         let tool = if let Ok(out) = self
             .executor
-            .run("which", &["ss"], &ctx.env_overrides, 4096)
+            .run_confined(
+                "which",
+                &["ss"],
+                &ctx.env_overrides,
+                4096,
+                &FsAccess::ReadOnly,
+            )
             .await
         {
             if out.success() {
@@ -90,11 +96,12 @@ impl Capability for NetworkConnections {
         debug!("NetworkConnections: using {}", tool);
         let out = match self
             .executor
-            .run(
+            .run_confined(
                 tool,
                 &["-tuln"],
                 &ctx.env_overrides,
                 ctx.resource_limits.max_output_bytes,
+                &FsAccess::ReadOnly,
             )
             .await
         {
@@ -185,7 +192,13 @@ impl Capability for NetworkInterfaces {
 
         let (tool, tool_args): (&str, &[&str]) = if let Ok(out) = self
             .executor
-            .run("which", &["ip"], &ctx.env_overrides, 4096)
+            .run_confined(
+                "which",
+                &["ip"],
+                &ctx.env_overrides,
+                4096,
+                &FsAccess::ReadOnly,
+            )
             .await
         {
             if out.success() {
@@ -200,11 +213,12 @@ impl Capability for NetworkInterfaces {
         debug!("NetworkInterfaces: using {}", tool);
         let out = match self
             .executor
-            .run(
+            .run_confined(
                 tool,
                 tool_args,
                 &ctx.env_overrides,
                 ctx.resource_limits.max_output_bytes,
+                &FsAccess::ReadOnly,
             )
             .await
         {

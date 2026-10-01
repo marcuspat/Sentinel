@@ -7,7 +7,7 @@ use sentinel_core::{
     capability::ResourceImpact, Capability, CapabilityKind, CapabilityManifest, CapabilityResult,
     CoreError, ExecutionContext, RiskTier,
 };
-use sentinel_exec::CommandExecutorTrait;
+use sentinel_exec::{CommandExecutorTrait, FsAccess};
 
 const VALID_METRICS: &[&str] = &["cpu", "memory", "disk", "load"];
 
@@ -133,7 +133,13 @@ impl Capability for SystemMetrics {
             debug!("SystemMetrics: reading /proc/loadavg");
             let out = match self
                 .executor
-                .run("cat", &["/proc/loadavg"], &ctx.env_overrides, 4096)
+                .run_confined(
+                    "cat",
+                    &["/proc/loadavg"],
+                    &ctx.env_overrides,
+                    4096,
+                    &FsAccess::ReadOnly,
+                )
                 .await
             {
                 Ok(o) => o,
@@ -149,11 +155,12 @@ impl Capability for SystemMetrics {
             debug!("SystemMetrics: reading /proc/meminfo");
             let out = match self
                 .executor
-                .run(
+                .run_confined(
                     "cat",
                     &["/proc/meminfo"],
                     &ctx.env_overrides,
                     ctx.resource_limits.max_output_bytes,
+                    &FsAccess::ReadOnly,
                 )
                 .await
             {
@@ -170,7 +177,13 @@ impl Capability for SystemMetrics {
             debug!("SystemMetrics: reading /proc/uptime");
             let out = match self
                 .executor
-                .run("cat", &["/proc/uptime"], &ctx.env_overrides, 4096)
+                .run_confined(
+                    "cat",
+                    &["/proc/uptime"],
+                    &ctx.env_overrides,
+                    4096,
+                    &FsAccess::ReadOnly,
+                )
                 .await
             {
                 Ok(o) => o,
@@ -183,11 +196,12 @@ impl Capability for SystemMetrics {
             debug!("SystemMetrics: running df for disk metrics");
             let out = match self
                 .executor
-                .run(
+                .run_confined(
                     "df",
                     &["-h", "--total"],
                     &ctx.env_overrides,
                     ctx.resource_limits.max_output_bytes,
+                    &FsAccess::ReadOnly,
                 )
                 .await
             {

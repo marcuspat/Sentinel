@@ -26,7 +26,8 @@ pub mod timeout_guard;
 pub use error::ExecError;
 pub use executor::{
     CommandExecutor, CommandExecutorTrait, CommandOutput, DryRunResult, ExecutionResult,
-    ExecutorConfig, HardenedExecutor, RealCommandExecutor, BUILTIN_COMMANDS,
+    ExecutorConfig, FsAccess, HardenedExecutor, LandlockMode, RealCommandExecutor,
+    BUILTIN_COMMANDS,
 };
 pub use output_capture::OutputCapture;
 pub use sandbox::{apply_sandbox, SandboxConfig, SandboxReport};

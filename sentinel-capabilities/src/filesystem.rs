@@ -45,7 +45,7 @@ use sentinel_core::{
     Capability, CapabilityKind, CapabilityManifest, CapabilityResult, CoreError, ExecutionContext,
     RiskTier,
 };
-use sentinel_exec::CommandExecutorTrait;
+use sentinel_exec::{CommandExecutorTrait, FsAccess};
 
 // ─── DiskUsage ───────────────────────────────────────────────────────────────
 
@@ -103,11 +103,12 @@ impl Capability for DiskUsage {
         debug!("DiskUsage: running df -h on {}", path);
         let df_out = match self
             .executor
-            .run(
+            .run_confined(
                 "df",
                 &["-h", path],
                 &ctx.env_overrides,
                 ctx.resource_limits.max_output_bytes,
+                &FsAccess::ReadOnly,
             )
             .await
         {
@@ -118,11 +119,12 @@ impl Capability for DiskUsage {
         debug!("DiskUsage: running du -sh on {}", path);
         let du_out = match self
             .executor
-            .run(
+            .run_confined(
                 "du",
                 &["-sh", path],
                 &ctx.env_overrides,
                 ctx.resource_limits.max_output_bytes,
+                &FsAccess::ReadOnly,
             )
             .await
         {
@@ -236,11 +238,19 @@ impl Capability for LogVacuum {
         // Discover files
         let find_out = match self
             .executor
-            .run(
+            .run_confined(
                 "find",
-                &[log_dir, "-name", "*.log", "-mtime", &format!("+{}", days)],
+                &[
+                    log_dir,
+                    "-name",
+                    "*.log",
+                    "-mtime",
+                    &format!("+{}", days),
+                    "-print0",
+                ],
                 &ctx.env_overrides,
                 ctx.resource_limits.max_output_bytes,
+                &FsAccess::ReadOnly,
             )
             .await
         {
@@ -248,10 +258,15 @@ impl Capability for LogVacuum {
             Err(e) => return CapabilityResult::failure(e.to_string(), true),
         };
 
+        // NUL-separated, never line-separated: a file name may contain a
+        // newline, and splitting on it would turn `x\n/etc/app.log` into a
+        // second path outside `log_dir`.  Anything that is not literally
+        // under `log_dir` is dropped as well.
+        let prefix = format!("{}/", log_dir.trim_end_matches('/'));
         let files: Vec<String> = find_out
             .stdout
-            .lines()
-            .filter(|l| !l.is_empty())
+            .split('\0')
+            .filter(|p| p.starts_with(&prefix))
             .map(String::from)
             .collect();
 
@@ -260,11 +275,12 @@ impl Capability for LogVacuum {
         for f in &files {
             match self
                 .executor
-                .run(
+                .run_confined(
                     "rm",
                     &["-f", f],
                     &ctx.env_overrides,
                     ctx.resource_limits.max_output_bytes,
+                    &FsAccess::write_under([log_dir]),
                 )
                 .await
             {
@@ -351,7 +367,11 @@ impl CachePrune {
             ("pacman", &["-Sc", "--noconfirm"]),
         ];
         for (prog, args) in candidates {
-            if let Ok(out) = self.executor.run("which", &[prog], env, 4096).await {
+            if let Ok(out) = self
+                .executor
+                .run_confined("which", &[prog], env, 4096, &FsAccess::ReadOnly)
+                .await
+            {
                 if out.success() {
                     return Some((prog, args.to_vec()));
                 }
@@ -404,11 +424,12 @@ impl Capability for CachePrune {
             let arg_refs: Vec<&str> = pm_args.to_vec();
             match self
                 .executor
-                .run(
+                .run_confined(
                     prog,
                     &arg_refs,
                     &ctx.env_overrides,
                     ctx.resource_limits.max_output_bytes,
+                    &FsAccess::package_state(),
                 )
                 .await
             {
@@ -424,11 +445,12 @@ impl Capability for CachePrune {
             if let Some(d) = dir.as_str() {
                 match self
                     .executor
-                    .run(
+                    .run_confined(
                         "find",
                         &[d, "-mindepth", "1", "-delete"],
                         &ctx.env_overrides,
                         ctx.resource_limits.max_output_bytes,
+                        &FsAccess::write_under([d]),
                     )
                     .await
                 {

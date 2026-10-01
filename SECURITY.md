@@ -52,9 +52,11 @@ Every production path runs commands through `HardenedExecutor` (ADR-016):
 - **rlimits**: file descriptors (256), core dumps disabled.
 - **`no_new_privs`**: children cannot gain privilege via setuid/setgid binaries or file
   capabilities.
-- **Landlock filesystem allowlist**: available through `SandboxConfig` and enforced by the
-  kernel when configured (Linux ≥ 5.13). It is **not** yet applied to the built-in
-  capabilities; see Known Limitations.
+- **Landlock filesystem confinement** (Linux ≥ 5.13): each command a built-in capability
+  spawns may write only where that capability needs to — nothing for read-only
+  capabilities, the target directory for `log_vacuum` and `cache_prune`. `package_upgrade`
+  is unconfined by design. `SENTINEL_LANDLOCK=require` fails closed on kernels without
+  Landlock; the default warns and continues. See ADR-016 for the full table.
 
 ### Capabilities (sentinel-capabilities)
 
@@ -93,9 +95,8 @@ Every production path runs commands through `HardenedExecutor` (ADR-016):
 
 ## Known Limitations
 
-- The built-in capabilities do not yet run under a Landlock profile. The mechanism exists
-  and is tested, but a single process-wide write allowlist would break package upgrades;
-  per-capability profiles are planned.
+- Landlock confines writes only. It does not restrict reads, signals, or connections to
+  existing Unix sockets, and on kernels without it the default is to warn, not refuse.
 - `deny_network` in `SandboxConfig` is not enforced. A warning is logged when it is set.
 - The child environment is inherited, and allowlisted program names are resolved through
   `PATH`. Run Sentinel with a trusted `PATH`.

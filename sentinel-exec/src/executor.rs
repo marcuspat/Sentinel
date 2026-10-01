@@ -62,6 +62,91 @@ pub trait CommandExecutorTrait: Send + Sync {
         env: &HashMap<String, String>,
         max_output_bytes: usize,
     ) -> Result<CommandOutput, ExecError>;
+
+    /// Like [`run`](Self::run), stating what the command may write.
+    ///
+    /// Executors that can enforce it (see [`HardenedExecutor`]) confine the
+    /// child accordingly; the default implementation ignores `fs`, which is
+    /// what mocks and the thin [`RealCommandExecutor`] do.
+    async fn run_confined(
+        &self,
+        program: &str,
+        args: &[&str],
+        env: &HashMap<String, String>,
+        max_output_bytes: usize,
+        fs: &FsAccess,
+    ) -> Result<CommandOutput, ExecError> {
+        let _ = fs;
+        self.run(program, args, env, max_output_bytes).await
+    }
+}
+
+/// What a single command is allowed to write.  Reading and executing stay
+/// unrestricted in every variant: the built-in capabilities exist to inspect
+/// the host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FsAccess {
+    /// The command may not create, modify, rename or delete anything.
+    ReadOnly,
+    /// The command may write only under these paths.
+    WriteUnder(Vec<PathBuf>),
+    /// No filesystem confinement.  For commands that legitimately write
+    /// across the system (a package upgrade).
+    Unrestricted,
+}
+
+impl FsAccess {
+    /// Write only under `paths`.
+    pub fn write_under<I, P>(paths: I) -> Self
+    where
+        I: IntoIterator<Item = P>,
+        P: Into<PathBuf>,
+    {
+        FsAccess::WriteUnder(paths.into_iter().map(Into::into).collect())
+    }
+
+    /// State directories a package manager touches even for queries and
+    /// cache cleaning (metadata caches, lock files, its own log).  Keeps
+    /// `/etc`, `/usr`, `/boot`, `/home` and `/root` read-only.
+    pub fn package_state() -> Self {
+        Self::write_under(["/var/cache", "/var/lib", "/var/log", "/run", "/tmp"])
+    }
+
+    /// `systemctl` talks to the service manager over sockets in `/run`.
+    pub fn service_control() -> Self {
+        Self::write_under(["/run"])
+    }
+}
+
+/// Whether [`HardenedExecutor`] applies per-command Landlock confinement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LandlockMode {
+    /// Never confine.  Escape hatch (`SENTINEL_LANDLOCK=off`).
+    Off,
+    /// Confine when the kernel supports Landlock; otherwise warn and run.
+    #[default]
+    BestEffort,
+    /// Refuse to run a confined command on a kernel that cannot enforce it
+    /// (`SENTINEL_LANDLOCK=require`).
+    Require,
+}
+
+impl LandlockMode {
+    /// Environment variable selecting the mode: `off`, `require`, or
+    /// anything else / unset for best effort.
+    pub const ENV: &'static str = "SENTINEL_LANDLOCK";
+
+    pub fn parse(value: Option<&str>) -> Self {
+        match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+            Some("off") | Some("0") | Some("false") | Some("disabled") => LandlockMode::Off,
+            Some("require") | Some("required") | Some("strict") => LandlockMode::Require,
+            _ => LandlockMode::BestEffort,
+        }
+    }
+
+    pub fn from_env() -> Self {
+        Self::parse(std::env::var(Self::ENV).ok().as_deref())
+    }
 }
 
 /// The real low-level executor that spawns OS processes via `tokio::process`.
@@ -152,6 +237,7 @@ pub struct HardenedExecutor {
     allowed: HashSet<String>,
     timeout_ms: u64,
     sandbox: SandboxConfig,
+    landlock: LandlockMode,
 }
 
 impl HardenedExecutor {
@@ -164,16 +250,14 @@ impl HardenedExecutor {
             allowed: allowed.into_iter().map(Into::into).collect(),
             timeout_ms,
             sandbox,
+            landlock: LandlockMode::default(),
         }
     }
 
     /// The profile for the built-in capability set: only
-    /// [`BUILTIN_COMMANDS`], a 15-minute timeout, rlimits and `no_new_privs`.
-    ///
-    /// No Landlock allowlist here: package managers legitimately write across
-    /// `/usr`, `/var` and `/etc`, so a single process-wide write allowlist
-    /// would either break them or allow everything.  Per-capability
-    /// allowlists are tracked in `docs/SOTA_ROADMAP.md`.
+    /// [`BUILTIN_COMMANDS`], a 15-minute timeout, rlimits, `no_new_privs`,
+    /// and per-command Landlock confinement from each capability's
+    /// [`FsAccess`] (mode taken from `$SENTINEL_LANDLOCK`).
     pub fn for_builtin_capabilities() -> Self {
         Self::new(
             BUILTIN_COMMANDS.iter().copied(),
@@ -183,6 +267,34 @@ impl HardenedExecutor {
                 ..Default::default()
             },
         )
+        .with_landlock_mode(LandlockMode::from_env())
+    }
+
+    pub fn with_landlock_mode(mut self, mode: LandlockMode) -> Self {
+        self.landlock = mode;
+        self
+    }
+
+    /// The sandbox one command runs under: the executor's base profile, plus
+    /// the Landlock allowlist `fs` asks for.
+    fn sandbox_for(&self, fs: &FsAccess) -> SandboxConfig {
+        let writable: &[PathBuf] = match fs {
+            FsAccess::Unrestricted => return self.sandbox.clone(),
+            _ if self.landlock == LandlockMode::Off => return self.sandbox.clone(),
+            FsAccess::ReadOnly => &[],
+            FsAccess::WriteUnder(paths) => paths,
+        };
+        let mut cfg = SandboxConfig::write_restricted(writable.iter().cloned());
+        // A base profile that is already confined stays confined: keep its
+        // read allowlist and only ever narrow the writable set.
+        if !self.sandbox.read_only_paths.is_empty() {
+            cfg.read_only_paths = self.sandbox.read_only_paths.clone();
+        }
+        cfg.deny_network = self.sandbox.deny_network;
+        cfg.deny_new_processes = self.sandbox.deny_new_processes;
+        cfg.drop_capabilities = self.sandbox.drop_capabilities;
+        cfg.require_enforcement = self.landlock == LandlockMode::Require;
+        cfg
     }
 
     /// Replace the sandbox profile (e.g. to add a Landlock allowlist).
@@ -199,12 +311,41 @@ impl HardenedExecutor {
 
 #[async_trait]
 impl CommandExecutorTrait for HardenedExecutor {
+    /// Runs under the executor's base sandbox only.  Capabilities call
+    /// [`run_confined`](CommandExecutorTrait::run_confined) instead.
     async fn run(
         &self,
         program: &str,
         args: &[&str],
         env: &HashMap<String, String>,
         max_output_bytes: usize,
+    ) -> Result<CommandOutput, ExecError> {
+        self.spawn_checked(program, args, env, max_output_bytes, &self.sandbox)
+            .await
+    }
+
+    async fn run_confined(
+        &self,
+        program: &str,
+        args: &[&str],
+        env: &HashMap<String, String>,
+        max_output_bytes: usize,
+        fs: &FsAccess,
+    ) -> Result<CommandOutput, ExecError> {
+        let sandbox = self.sandbox_for(fs);
+        self.spawn_checked(program, args, env, max_output_bytes, &sandbox)
+            .await
+    }
+}
+
+impl HardenedExecutor {
+    async fn spawn_checked(
+        &self,
+        program: &str,
+        args: &[&str],
+        env: &HashMap<String, String>,
+        max_output_bytes: usize,
+        sandbox: &SandboxConfig,
     ) -> Result<CommandOutput, ExecError> {
         // Exact match on the string the capability passed: `/tmp/evil/ls`
         // is not `ls`.
@@ -223,7 +364,7 @@ impl CommandExecutorTrait for HardenedExecutor {
             // session) the child must not keep running.
             .kill_on_drop(true);
 
-        apply_sandbox(&mut cmd, &self.sandbox)?;
+        apply_sandbox(&mut cmd, sandbox)?;
 
         let mut child = cmd
             .spawn()
@@ -821,6 +962,190 @@ mod tests {
             "sh", "bash", "dash", "zsh", "python", "python3", "perl", "env", "sudo",
         ] {
             assert!(!BUILTIN_COMMANDS.contains(&forbidden), "{forbidden}");
+        }
+    }
+
+    // ── Per-command confinement (FsAccess) ───────────────────────────────────
+
+    fn landlock_enforced() -> bool {
+        let mut probe = Command::new("true");
+        let cfg = SandboxConfig {
+            require_enforcement: false,
+            ..SandboxConfig::write_restricted(Vec::<PathBuf>::new())
+        };
+        let ok = apply_sandbox(&mut probe, &cfg).unwrap().filesystem_enforced;
+        if !ok {
+            eprintln!("SKIPPED: kernel has no Landlock support");
+        }
+        ok
+    }
+
+    fn touch_exec(mode: LandlockMode) -> HardenedExecutor {
+        HardenedExecutor::new(["touch", "rm"], 10_000, SandboxConfig::default())
+            .with_landlock_mode(mode)
+    }
+
+    #[tokio::test]
+    async fn read_only_command_cannot_write_anywhere() {
+        if !landlock_enforced() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("f");
+        let existing = dir.path().join("keep");
+        std::fs::write(&existing, "x").unwrap();
+        let exec = touch_exec(LandlockMode::BestEffort);
+        let env = HashMap::new();
+
+        let out = exec
+            .run_confined(
+                "touch",
+                &[target.to_str().unwrap()],
+                &env,
+                4096,
+                &FsAccess::ReadOnly,
+            )
+            .await
+            .unwrap();
+        assert!(!out.success());
+        assert!(!target.exists());
+
+        let out = exec
+            .run_confined(
+                "rm",
+                &["-f", existing.to_str().unwrap()],
+                &env,
+                4096,
+                &FsAccess::ReadOnly,
+            )
+            .await
+            .unwrap();
+        assert!(!out.success());
+        assert!(existing.exists(), "read-only command deleted a file");
+    }
+
+    #[tokio::test]
+    async fn write_under_allows_only_the_named_tree() {
+        if !landlock_enforced() {
+            return;
+        }
+        let allowed = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let exec = touch_exec(LandlockMode::BestEffort);
+        let env = HashMap::new();
+        let fs = FsAccess::write_under([allowed.path()]);
+
+        let inside = allowed.path().join("in");
+        let outside = other.path().join("out");
+        let ok = exec
+            .run_confined("touch", &[inside.to_str().unwrap()], &env, 4096, &fs)
+            .await
+            .unwrap();
+        assert!(ok.success(), "{}", ok.stderr);
+        let denied = exec
+            .run_confined("touch", &[outside.to_str().unwrap()], &env, 4096, &fs)
+            .await
+            .unwrap();
+        assert!(!denied.success());
+        assert!(inside.exists() && !outside.exists());
+    }
+
+    #[tokio::test]
+    async fn unrestricted_and_off_mode_do_not_confine() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = HashMap::new();
+
+        let a = dir.path().join("a");
+        let out = touch_exec(LandlockMode::BestEffort)
+            .run_confined(
+                "touch",
+                &[a.to_str().unwrap()],
+                &env,
+                4096,
+                &FsAccess::Unrestricted,
+            )
+            .await
+            .unwrap();
+        assert!(out.success() && a.exists());
+
+        let b = dir.path().join("b");
+        let out = touch_exec(LandlockMode::Off)
+            .run_confined(
+                "touch",
+                &[b.to_str().unwrap()],
+                &env,
+                4096,
+                &FsAccess::ReadOnly,
+            )
+            .await
+            .unwrap();
+        assert!(
+            out.success() && b.exists(),
+            "Off is the documented escape hatch"
+        );
+    }
+
+    #[tokio::test]
+    async fn confined_run_still_enforces_the_allowlist() {
+        let exec = touch_exec(LandlockMode::BestEffort);
+        let err = exec
+            .run_confined(
+                "sh",
+                &["-c", "true"],
+                &HashMap::new(),
+                4096,
+                &FsAccess::Unrestricted,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ExecError::NotAllowed(_)));
+    }
+
+    #[test]
+    fn sandbox_for_maps_access_to_profiles() {
+        let exec = touch_exec(LandlockMode::Require);
+        let ro = exec.sandbox_for(&FsAccess::ReadOnly);
+        assert_eq!(ro.read_only_paths, vec![PathBuf::from("/")]);
+        assert_eq!(ro.writable_paths, vec![PathBuf::from("/dev/null")]);
+        assert!(ro.require_enforcement && ro.no_new_privs);
+
+        let w = exec.sandbox_for(&FsAccess::write_under(["/var/log/app"]));
+        assert!(w.writable_paths.contains(&PathBuf::from("/var/log/app")));
+
+        let free = exec.sandbox_for(&FsAccess::Unrestricted);
+        assert!(free.read_only_paths.is_empty() && free.writable_paths.is_empty());
+
+        let best = touch_exec(LandlockMode::BestEffort).sandbox_for(&FsAccess::ReadOnly);
+        assert!(
+            !best.require_enforcement,
+            "old kernels warn instead of failing"
+        );
+    }
+
+    #[test]
+    fn landlock_mode_parsing() {
+        assert_eq!(LandlockMode::parse(None), LandlockMode::BestEffort);
+        assert_eq!(LandlockMode::parse(Some("")), LandlockMode::BestEffort);
+        assert_eq!(LandlockMode::parse(Some("OFF")), LandlockMode::Off);
+        assert_eq!(
+            LandlockMode::parse(Some(" require ")),
+            LandlockMode::Require
+        );
+        assert_eq!(
+            LandlockMode::parse(Some("nonsense")),
+            LandlockMode::BestEffort
+        );
+    }
+
+    #[test]
+    fn package_and_service_profiles_keep_system_trees_read_only() {
+        for fs in [FsAccess::package_state(), FsAccess::service_control()] {
+            let FsAccess::WriteUnder(paths) = fs else {
+                panic!("expected an allowlist")
+            };
+            for forbidden in ["/", "/etc", "/usr", "/boot", "/home", "/root", "/bin"] {
+                assert!(!paths.contains(&PathBuf::from(forbidden)), "{forbidden}");
+            }
         }
     }
 }

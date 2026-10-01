@@ -81,19 +81,49 @@ All four production call sites now use `HardenedExecutor::for_builtin_capabiliti
 | rlimits in production | No | Yes |
 | `no_new_privs` | No | Yes |
 | Child killed when its step is cancelled | No | Yes |
-| Landlock filesystem allowlist | Not implemented | Implemented and tested; **not yet switched on for the built-in capabilities** |
+| Landlock filesystem allowlist | Not implemented | Enforced per command for the built-in capabilities (see the amendment below) |
 | Network isolation (`deny_network`) | No | No (next roadmap item) |
 | Environment scrubbing / fixed `PATH` | No | No (next roadmap item) |
-
-The Landlock row is deliberate. Package managers legitimately write across
-`/usr`, `/var` and `/etc`, so one process-wide write allowlist would either
-break `package_upgrade` or allow nearly everything. The right shape is a
-profile per capability (`log_vacuum` may write only under its `log_dir`,
-`disk_usage` nowhere). That is a roadmap item of its own.
 
 Allowlisted program names are resolved through `PATH`. Until the environment
 is scrubbed, an attacker who controls Sentinel's `PATH` controls what `rm`
 means; `no_new_privs` and the allowlist do not help with that.
+
+## Amendment: per-capability profiles
+
+`CommandExecutorTrait` gained `run_confined(…, fs: &FsAccess)`, defaulting to
+`run` so mocks and the thin executor are unaffected. `HardenedExecutor` turns
+the `FsAccess` into a Landlock profile for that one child. Reading and
+executing stay unrestricted in every profile; only writes are confined.
+
+| Capability / command | May write |
+|---|---|
+| `disk_usage`, `process_list`, `process_kill`, `service_status`, `network_*`, `system_metrics`, every `which` probe, `log_vacuum`'s `find` | nothing (`/dev/null` only) |
+| `log_vacuum`'s `rm` | under its `log_dir` |
+| `cache_prune`'s `find -delete` | under the pruned path |
+| `service_start` / `stop` / `restart` (`systemctl`) | under `/run` |
+| `package_list`, `cache_prune`'s package-manager clean | `/var/cache`, `/var/lib`, `/var/log`, `/run`, `/tmp` |
+| `package_upgrade` | unconfined, on purpose: an upgrade writes across `/usr`, `/etc` and `/boot` |
+
+`SENTINEL_LANDLOCK` selects the mode: unset is best effort (confine when the
+kernel can, warn when it cannot), `require` refuses to run a confined command
+on a kernel without Landlock, `off` disables confinement.
+
+Two honest caveats:
+
+- The `systemctl` and package-manager profiles were chosen from how those
+  tools behave, not verified against a live systemd or every package manager
+  in this change's tests (the CI container has neither). If one needs a path
+  not listed, the command fails with "Permission denied"; `off` is the
+  immediate workaround and the profile is one line to widen.
+- Landlock does not mediate signals or connecting to existing Unix sockets, so
+  `kill` and `systemctl` are confined in what they can *write*, not in whom
+  they can signal or ask.
+
+This already paid for itself. `log_vacuum` split `find` output on newlines, so
+a crafted directory name could redirect its `rm -f` to any `*.log` path on the
+host. That is fixed at the source (NUL-separated output, prefix check), and
+the confined `rm` would have refused it regardless.
 
 ## Consequences
 
