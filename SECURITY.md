@@ -40,13 +40,21 @@ relies on multiple layers of defense:
 
 ### Command Execution (sentinel-exec)
 
-- **Exact-match allowlist**: Command strings must match exactly — no basename fallback, no glob.
-  `/tmp/evil/ls` does **not** match an allowlist containing `"ls"`.
+Every production path runs commands through `HardenedExecutor` (ADR-016):
+
+- **Exact-match allowlist**: only the programs the built-in capabilities spawn
+  (`BUILTIN_COMMANDS`). No shells, interpreters or `sudo`. `/tmp/evil/ls` does **not**
+  match `"ls"`.
 - **No shell**: Commands are spawned directly via `tokio::process::Command` with explicit
   argument vectors — no shell expansion.
-- **Sandbox**: `setrlimit` limits file descriptors (256), disables core dumps, optionally
-  restricts process creation. Network isolation requires external namespaces/seccomp.
-- **Timeout + output cap**: Configurable per-command timeout and max output bytes.
+- **Timeout + output cap**: 15-minute default with SIGTERM → SIGKILL; a child is also
+  killed when the step that started it is cancelled.
+- **rlimits**: file descriptors (256), core dumps disabled.
+- **`no_new_privs`**: children cannot gain privilege via setuid/setgid binaries or file
+  capabilities.
+- **Landlock filesystem allowlist**: available through `SandboxConfig` and enforced by the
+  kernel when configured (Linux ≥ 5.13). It is **not** yet applied to the built-in
+  capabilities; see Known Limitations.
 
 ### Capabilities (sentinel-capabilities)
 
@@ -85,9 +93,12 @@ relies on multiple layers of defense:
 
 ## Known Limitations
 
-- `deny_network` in `SandboxConfig` is advisory: enforcing network isolation requires Linux
-  network namespaces or seccomp BPF filters, which are outside the scope of rlimit-based
-  sandboxing. A `tracing::warn!` is emitted when this flag is set.
+- The built-in capabilities do not yet run under a Landlock profile. The mechanism exists
+  and is tested, but a single process-wide write allowlist would break package upgrades;
+  per-capability profiles are planned.
+- `deny_network` in `SandboxConfig` is not enforced. A warning is logged when it is set.
+- The child environment is inherited, and allowlisted program names are resolved through
+  `PATH`. Run Sentinel with a trusted `PATH`.
 - The TLS fingerprint comparison in `PinnedFingerprintVerifier` uses string equality on
   hex-encoded bytes. For use cases requiring constant-time comparison, replace with
   `subtle::ConstantTimeEq` on the raw digest bytes.

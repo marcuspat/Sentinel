@@ -19,7 +19,7 @@ use sentinel_agent_llm::{
 use sentinel_audit::AuditLog;
 use sentinel_capabilities::all_capabilities;
 use sentinel_core::{ApprovalDecision, SessionPhase};
-use sentinel_exec::RealCommandExecutor;
+use sentinel_exec::HardenedExecutor;
 use sentinel_policy::default_policy;
 
 use crate::app::{
@@ -95,7 +95,7 @@ async fn run_inner(
     };
 
     // ── 2. Assemble capabilities, registry, policy, and audit log ─────────────
-    let executor = Arc::new(RealCommandExecutor);
+    let executor = Arc::new(HardenedExecutor::for_builtin_capabilities());
     let caps = all_capabilities(executor);
 
     let mut registry = CapabilityRegistry::new();

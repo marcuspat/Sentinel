@@ -26,9 +26,10 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
-          components: clippy
+          toolchain: "1.97.0" # keep in step with ci.yml
+          components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@v2
 

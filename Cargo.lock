@@ -2547,6 +2547,7 @@ name = "sentinel-exec"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "libc",
  "nix 0.27.1",
  "sentinel-core",
  "serde",

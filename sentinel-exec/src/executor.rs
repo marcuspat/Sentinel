@@ -114,6 +114,147 @@ impl CommandExecutorTrait for RealCommandExecutor {
     }
 }
 
+/// Programs the built-in capabilities spawn.  Anything else is refused.
+pub const BUILTIN_COMMANDS: &[&str] = &[
+    "apt",
+    "apt-get",
+    "cat",
+    "df",
+    "dnf",
+    "du",
+    "find",
+    "ifconfig",
+    "ip",
+    "kill",
+    "netstat",
+    "pacman",
+    "ps",
+    "rm",
+    "ss",
+    "systemctl",
+    "which",
+    "yum",
+];
+
+/// Default wall-clock budget for one command under [`HardenedExecutor`].
+/// Generous because a full package upgrade is a legitimate long-running step.
+pub const HARDENED_DEFAULT_TIMEOUT_MS: u64 = 15 * 60 * 1000;
+
+/// [`CommandExecutorTrait`] implementation that enforces the constraints
+/// [`RealCommandExecutor`] does not: an exact-match command allowlist, a
+/// timeout with SIGTERM → SIGKILL, rlimits, `no_new_privs`, an optional
+/// Landlock filesystem allowlist, and kill-on-drop so a cancelled step does
+/// not leave its child running.
+///
+/// This is what production code paths hand to capabilities.
+#[derive(Debug, Clone)]
+pub struct HardenedExecutor {
+    allowed: HashSet<String>,
+    timeout_ms: u64,
+    sandbox: SandboxConfig,
+}
+
+impl HardenedExecutor {
+    pub fn new<I, S>(allowed: I, timeout_ms: u64, sandbox: SandboxConfig) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self {
+            allowed: allowed.into_iter().map(Into::into).collect(),
+            timeout_ms,
+            sandbox,
+        }
+    }
+
+    /// The profile for the built-in capability set: only
+    /// [`BUILTIN_COMMANDS`], a 15-minute timeout, rlimits and `no_new_privs`.
+    ///
+    /// No Landlock allowlist here: package managers legitimately write across
+    /// `/usr`, `/var` and `/etc`, so a single process-wide write allowlist
+    /// would either break them or allow everything.  Per-capability
+    /// allowlists are tracked in `docs/SOTA_ROADMAP.md`.
+    pub fn for_builtin_capabilities() -> Self {
+        Self::new(
+            BUILTIN_COMMANDS.iter().copied(),
+            HARDENED_DEFAULT_TIMEOUT_MS,
+            SandboxConfig {
+                no_new_privs: true,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Replace the sandbox profile (e.g. to add a Landlock allowlist).
+    pub fn with_sandbox(mut self, sandbox: SandboxConfig) -> Self {
+        self.sandbox = sandbox;
+        self
+    }
+
+    pub fn with_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.timeout_ms = timeout_ms;
+        self
+    }
+}
+
+#[async_trait]
+impl CommandExecutorTrait for HardenedExecutor {
+    async fn run(
+        &self,
+        program: &str,
+        args: &[&str],
+        env: &HashMap<String, String>,
+        max_output_bytes: usize,
+    ) -> Result<CommandOutput, ExecError> {
+        // Exact match on the string the capability passed: `/tmp/evil/ls`
+        // is not `ls`.
+        if !self.allowed.contains(program) {
+            warn!(program, "command refused: not in the executor allowlist");
+            return Err(ExecError::NotAllowed(program.to_string()));
+        }
+
+        let mut cmd = Command::new(program);
+        cmd.args(args)
+            .envs(env)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .stdin(std::process::Stdio::null())
+            // If the caller's future is dropped (step timeout, cancelled
+            // session) the child must not keep running.
+            .kill_on_drop(true);
+
+        apply_sandbox(&mut cmd, &self.sandbox)?;
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| ExecError::SpawnFailed(e.to_string()))?;
+
+        let stdout_pipe = child
+            .stdout
+            .take()
+            .ok_or_else(|| ExecError::SpawnFailed("failed to capture stdout".into()))?;
+        let stderr_pipe = child
+            .stderr
+            .take()
+            .ok_or_else(|| ExecError::SpawnFailed("failed to capture stderr".into()))?;
+
+        let capture = OutputCapture::new(max_output_bytes);
+        let guard = TimeoutGuard::new(child, self.timeout_ms);
+        let ((stdout, stderr, truncated), waited) = tokio::join!(
+            capture.capture(stdout_pipe, stderr_pipe),
+            guard.wait_with_timeout()
+        );
+        let (status, _timed_out) = waited?;
+
+        Ok(CommandOutput {
+            exit_code: status.code(),
+            stdout,
+            stderr,
+            truncated,
+        })
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // High-level struct-based API (full constraint enforcement)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -132,6 +273,9 @@ pub struct ExecutorConfig {
     /// Override working directory for every spawned child.  When `None` the
     /// directory from `ExecutionContext.working_dir` is used if present.
     pub working_dir: Option<PathBuf>,
+    /// Kernel-level restrictions applied to every child (rlimits,
+    /// `no_new_privs`, Landlock filesystem allowlist).
+    pub sandbox: SandboxConfig,
 }
 
 impl Default for ExecutorConfig {
@@ -141,6 +285,7 @@ impl Default for ExecutorConfig {
             max_output_bytes: 1024 * 1024, // 1 MiB
             allowed_commands: None,        // deny-all by default
             working_dir: None,
+            sandbox: SandboxConfig::default(),
         }
     }
 }
@@ -237,8 +382,7 @@ impl CommandExecutor {
         cmd.stdin(std::process::Stdio::null());
 
         // ── 4. Apply sandbox ─────────────────────────────────────────────────
-        let sandbox = SandboxConfig::default();
-        apply_sandbox(&mut cmd, &sandbox);
+        apply_sandbox(&mut cmd, &self.config.sandbox)?;
 
         // ── 5. Spawn ─────────────────────────────────────────────────────────
         let start = Instant::now();
@@ -576,5 +720,107 @@ mod tests {
             .await
             .expect("run failed");
         assert!(out.stderr.contains("err_trait"));
+    }
+
+    // ── HardenedExecutor ──────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn hardened_refuses_commands_outside_the_allowlist() {
+        let exec = HardenedExecutor::for_builtin_capabilities();
+        let env = HashMap::new();
+        for bad in ["sh", "bash", "curl", "/bin/cat", "/tmp/evil/cat", "cat "] {
+            let err = exec.run(bad, &[], &env, 4096).await.unwrap_err();
+            assert!(matches!(err, ExecError::NotAllowed(_)), "{bad}: {err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn hardened_runs_allowed_commands_with_no_new_privs() {
+        let exec = HardenedExecutor::for_builtin_capabilities();
+        let out = exec
+            .run("cat", &["/proc/self/status"], &HashMap::new(), 64 * 1024)
+            .await
+            .unwrap();
+        assert!(out.success());
+        let line = out
+            .stdout
+            .lines()
+            .find(|l| l.starts_with("NoNewPrivs"))
+            .expect("NoNewPrivs line");
+        assert!(line.trim_end().ends_with('1'), "{line}");
+    }
+
+    #[tokio::test]
+    async fn hardened_times_out_and_kills_the_child() {
+        let exec = HardenedExecutor::new(["sleep"], 200, SandboxConfig::default());
+        let start = std::time::Instant::now();
+        let err = exec
+            .run("sleep", &["30"], &HashMap::new(), 4096)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ExecError::Timeout { ms: 200 }), "{err}");
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
+    }
+
+    #[tokio::test]
+    async fn hardened_kills_the_child_when_the_caller_gives_up() {
+        // The gate wraps each step in `tokio::time::timeout`; when that fires
+        // the run future is dropped.  The child must die with it.
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("still-running");
+        let script = format!("sleep 1; touch {}", marker.display());
+        let exec = HardenedExecutor::new(["sh"], 60_000, SandboxConfig::default());
+        let env = HashMap::new();
+        let args = ["-c", script.as_str()];
+        let run = exec.run("sh", &args, &env, 4096);
+        let res = tokio::time::timeout(std::time::Duration::from_millis(150), run).await;
+        assert!(res.is_err(), "outer timeout fired");
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        assert!(!marker.exists(), "child survived its cancelled caller");
+    }
+
+    #[tokio::test]
+    async fn hardened_applies_a_landlock_profile() {
+        let allowed = tempfile::tempdir().unwrap();
+        let forbidden = tempfile::tempdir().unwrap();
+        let sandbox = SandboxConfig {
+            // Tolerate kernels without Landlock: then this test proves nothing
+            // and says so rather than failing.
+            require_enforcement: false,
+            ..SandboxConfig::write_restricted([allowed.path()])
+        };
+        let mut probe = Command::new("true");
+        if !apply_sandbox(&mut probe, &sandbox)
+            .unwrap()
+            .filesystem_enforced
+        {
+            eprintln!("SKIPPED: kernel has no Landlock support");
+            return;
+        }
+        let exec = HardenedExecutor::new(["touch"], 10_000, sandbox);
+        let env = HashMap::new();
+
+        let inside = allowed.path().join("a");
+        let outside = forbidden.path().join("b");
+        let ok = exec
+            .run("touch", &[inside.to_str().unwrap()], &env, 4096)
+            .await
+            .unwrap();
+        assert!(ok.success(), "{}", ok.stderr);
+        let denied = exec
+            .run("touch", &[outside.to_str().unwrap()], &env, 4096)
+            .await
+            .unwrap();
+        assert!(!denied.success());
+        assert!(!outside.exists());
+    }
+
+    #[test]
+    fn builtin_allowlist_has_no_shells_or_interpreters() {
+        for forbidden in [
+            "sh", "bash", "dash", "zsh", "python", "python3", "perl", "env", "sudo",
+        ] {
+            assert!(!BUILTIN_COMMANDS.contains(&forbidden), "{forbidden}");
+        }
     }
 }

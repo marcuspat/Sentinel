@@ -19,7 +19,7 @@ use sentinel_agent_llm::{
 use sentinel_audit::AuditLog;
 use sentinel_capabilities::all_capabilities;
 use sentinel_core::{ApprovalDecision, CapabilityResult, ExecutionContext};
-use sentinel_exec::RealCommandExecutor;
+use sentinel_exec::HardenedExecutor;
 use sentinel_fleet::{execute_on_fleet, FleetConfig};
 use sentinel_policy::{default_policy, RuleCondition};
 use uuid::Uuid;
@@ -396,7 +396,7 @@ async fn run_agent(
     };
 
     // 2. Executor + real capability implementations.
-    let executor = Arc::new(RealCommandExecutor);
+    let executor = Arc::new(HardenedExecutor::for_builtin_capabilities());
     let caps = all_capabilities(executor);
 
     // 3. Registry of capability manifests (for prompt/planning).
@@ -564,7 +564,7 @@ async fn run_fleet(
 }
 
 fn list_capabilities() {
-    let executor = Arc::new(RealCommandExecutor);
+    let executor = Arc::new(HardenedExecutor::for_builtin_capabilities());
     let caps = all_capabilities(executor);
     println!("Available capabilities ({}):", caps.len());
     for cap in &caps {

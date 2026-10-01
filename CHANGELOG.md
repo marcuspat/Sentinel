@@ -7,6 +7,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Security
+- **Production now runs commands through the constrained executor (ADR-016).**
+  The command allowlist, timeouts and rlimits described in `SECURITY.md` lived
+  in `CommandExecutor`, but `sentinel run`, the TUI, `serve --mcp` and
+  `sentinel execute` all gave capabilities `RealCommandExecutor`, which has
+  none of them. They now use the new `HardenedExecutor`: exact-match allowlist
+  of the 18 programs built-in capabilities spawn, 15-minute timeout with
+  SIGTERM → SIGKILL, rlimits, `PR_SET_NO_NEW_PRIVS`, and kill-on-drop
+- **Landlock filesystem sandbox (ADR-016).** `SandboxConfig::read_only_paths`
+  and `writable_paths` were advisory and unused. They are now enforced by a
+  Landlock ruleset covering every filesystem right the kernel supports, applied
+  between `fork` and `execve` and inherited by all descendants.
+  `SandboxConfig::write_restricted(paths)` gives "read anywhere, write only
+  here". Kernels without Landlock either refuse to spawn or warn, per
+  `require_enforcement`. Implemented and tested, but not yet switched on for
+  the built-in capabilities: that needs per-capability profiles
 - **Signed audit checkpoints (ADR-015).** The hash chain alone could not tell
   a genuine log from one rewritten wholesale: the hashes are unkeyed, so a
   forged but consistent chain verified as `VALID`. With `SENTINEL_AUDIT_KEY`
@@ -32,6 +47,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `SuspectedPromptInjection` event
 
 ### Fixed
+- A plan step that hit the MCP gate's per-step timeout left its child process
+  running. Children are now killed when the step's future is dropped
+- CI failed on untouched code when Rust 1.99 shipped a clippy lint
+  (`double_must_use`) that fires inside `async-trait`'s expansion. CI and the
+  release verify job now pin the toolchain (1.97.0) instead of tracking
+  `stable`, and clippy failures are surfaced as check annotations
 - Investigation prompts panicked when truncating capability output whose
   2 000th byte fell inside a multi-byte UTF-8 character. Truncation is now
   char-boundary safe, and planning prompts, which previously had no limit, are

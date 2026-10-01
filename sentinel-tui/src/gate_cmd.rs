@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use sentinel_audit::AuditEventType;
 use sentinel_capabilities::all_capabilities;
-use sentinel_exec::RealCommandExecutor;
+use sentinel_exec::HardenedExecutor;
 use sentinel_mcp::{
     default_state_dir, execute_approved_plan, index_capabilities, plan_status_json, AuditSink,
     Gate, GateConfig, PlanStatus, PlanStore, StoredPlan,
@@ -39,7 +39,7 @@ pub async fn serve(mcp: bool, state_dir: Option<PathBuf>, host: String) -> Resul
     let state_dir = resolve_state_dir(state_dir);
     let mut config = GateConfig::new(&state_dir);
     config.host = host;
-    let caps = all_capabilities(Arc::new(RealCommandExecutor));
+    let caps = all_capabilities(Arc::new(HardenedExecutor::for_builtin_capabilities()));
     let gate = Gate::new(config, caps, default_policy())?;
     tracing::info!(
         state_dir = %state_dir.display(),
@@ -182,7 +182,9 @@ pub async fn execute(
 ) -> Result<()> {
     let state_dir = resolve_state_dir(state_dir);
     let store = PlanStore::open(&state_dir)?;
-    let caps = index_capabilities(all_capabilities(Arc::new(RealCommandExecutor)));
+    let caps = index_capabilities(all_capabilities(Arc::new(
+        HardenedExecutor::for_builtin_capabilities(),
+    )));
     let policy = default_policy();
     let audit = AuditSink::create(&state_dir, "execute")?;
     let report =
