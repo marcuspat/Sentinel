@@ -85,8 +85,23 @@ enum Commands {
     Capabilities,
     /// Show current policy rules
     Policy,
-    /// Verify an audit log file
-    VerifyAudit { path: std::path::PathBuf },
+    /// Verify an audit log file (hash chain, and signatures when --pubkey is given)
+    VerifyAudit {
+        path: std::path::PathBuf,
+        /// Trusted Ed25519 public key: 64 hex chars, or a file containing them.
+        /// Checks the signed checkpoints in `<PATH>.sig` against this key
+        #[arg(long, env = "SENTINEL_AUDIT_PUBKEY")]
+        pubkey: Option<String>,
+        /// Fail unless every event is covered by a valid signature (needs --pubkey)
+        #[arg(long, requires = "pubkey")]
+        require_signature: bool,
+    },
+    /// Generate an Ed25519 audit-signing key (mode 0600) and print its public key
+    AuditKeygen {
+        /// Where to write the private key; refuses to overwrite
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
     /// Run a capability across multiple hosts in parallel over SSH
     Fleet {
         /// Operational goal / label for this fleet run
@@ -207,7 +222,12 @@ async fn main() -> Result<()> {
             step_timeout_ms,
         } => gate_cmd::execute(plan_id, state_dir, step_timeout_ms).await?,
         Commands::Policy => show_policy(),
-        Commands::VerifyAudit { path } => verify_audit(&path)?,
+        Commands::VerifyAudit {
+            path,
+            pubkey,
+            require_signature,
+        } => verify_audit(&path, pubkey.as_deref(), require_signature)?,
+        Commands::AuditKeygen { out } => audit_keygen(&out)?,
         Commands::Fleet {
             goal,
             hosts,
@@ -389,10 +409,9 @@ async fn run_agent(
     // 4. Policy + audit log (persisted to a per-session JSONL file).
     let policy = Arc::new(default_policy());
     let audit_path = std::path::PathBuf::from(format!("sentinel-audit-{session_id}.jsonl"));
-    let audit = Arc::new(Mutex::new(AuditLog::new(
-        session_id,
-        Some(audit_path.clone()),
-    )));
+    let audit = Arc::new(Mutex::new(
+        AuditLog::new(session_id, Some(audit_path.clone())).with_signer_from_env()?,
+    ));
 
     // 5. Reasoning loop wired with the concrete capabilities.
     let agent = ReasoningLoop::new(
@@ -643,19 +662,37 @@ fn describe_condition(cond: &RuleCondition) -> String {
     }
 }
 
-fn verify_audit(path: &std::path::Path) -> Result<()> {
+fn audit_keygen(out: &std::path::Path) -> Result<()> {
+    let signer = sentinel_audit::AuditSigner::generate()?;
+    signer
+        .save(out)
+        .map_err(|e| anyhow::anyhow!("could not write {}: {e}", out.display()))?;
+    eprintln!("Private key written to {} (mode 0600).", out.display());
+    eprintln!("Sign audit logs by setting SENTINEL_AUDIT_KEY to that path.");
+    eprintln!(
+        "Give verifiers this public key (key id {}):",
+        signer.key_id()
+    );
+    println!("{}", signer.public_key_hex());
+    Ok(())
+}
+
+fn verify_audit(
+    path: &std::path::Path,
+    pubkey: Option<&str>,
+    require_signature: bool,
+) -> Result<()> {
+    use sentinel_audit::signing::{
+        parse_checkpoints, parse_public_key, sidecar_path, verify_checkpoints,
+    };
     use sentinel_audit::verifier::AuditVerifier;
 
     let content = std::fs::read_to_string(path)?;
-    let result = AuditVerifier::verify_jsonl(&content)
+    let events = AuditVerifier::parse_jsonl(&content)
         .map_err(|e| anyhow::anyhow!("Audit verification error: {}", e))?;
+    let result = AuditVerifier::verify_events(&events);
 
-    if result.valid {
-        println!(
-            "Audit log VALID — {} event(s) verified.",
-            result.events_checked
-        );
-    } else {
+    if !result.valid {
         eprintln!(
             "Audit log INVALID — chain broken at sequence {}.",
             result.first_broken_at.unwrap_or(0)
@@ -666,5 +703,65 @@ fn verify_audit(path: &std::path::Path) -> Result<()> {
         std::process::exit(1);
     }
 
+    let sidecar = sidecar_path(path);
+    let Some(pubkey) = pubkey else {
+        println!(
+            "Audit log VALID — {} event(s) verified.",
+            result.events_checked
+        );
+        if sidecar.exists() {
+            println!(
+                "Signatures NOT checked: {} exists; pass --pubkey to verify it.",
+                sidecar.display()
+            );
+        }
+        return Ok(());
+    };
+
+    // A --pubkey value is the key itself or a file holding it.
+    let key_text = if std::path::Path::new(pubkey).is_file() {
+        std::fs::read_to_string(pubkey)?
+    } else {
+        pubkey.to_string()
+    };
+    let key = parse_public_key(&key_text)?;
+
+    let checkpoints = match std::fs::read_to_string(&sidecar) {
+        Ok(text) => parse_checkpoints(&text)
+            .map_err(|e| anyhow::anyhow!("Signature sidecar unreadable: {e}"))?,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(e.into()),
+    };
+    let sig = verify_checkpoints(&events, &checkpoints, &key);
+
+    if let Some(err) = &sig.error {
+        eprintln!("Audit log INVALID — hash chain is consistent but signatures are not.");
+        eprintln!("Error: {err}");
+        std::process::exit(1);
+    }
+    if sig.fully_signed() {
+        println!(
+            "Audit log VALID — {} event(s) verified, {} signed checkpoint(s), every event covered.",
+            result.events_checked, sig.checkpoints_verified
+        );
+        return Ok(());
+    }
+
+    let detail = if sig.checkpoints_verified == 0 {
+        format!("no signed checkpoints found at {}", sidecar.display())
+    } else {
+        format!(
+            "last {} of {} event(s) are not covered by a signature",
+            sig.unsigned_tail, result.events_checked
+        )
+    };
+    if require_signature {
+        eprintln!("Audit log INVALID — {detail}.");
+        std::process::exit(1);
+    }
+    println!(
+        "Audit log VALID (hash chain) — {} event(s) verified; WARNING: {detail}.",
+        result.events_checked
+    );
     Ok(())
 }

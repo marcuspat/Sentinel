@@ -59,6 +59,12 @@ relies on multiple layers of defense:
 
 - **Hash chain**: SHA-256 chained log — every event includes the hash of the prior event.
   Tampering (deletion, reordering, modification) is detectable via `sentinel verify-audit`.
+- **Signed checkpoints (opt-in, ADR-015)**: the hash chain is unkeyed, so on its own it
+  cannot detect a log that was rewritten wholesale with a consistent chain. Set
+  `SENTINEL_AUDIT_KEY` (from `sentinel audit-keygen`) to sign the chain head after every
+  event; verify with `sentinel verify-audit PATH --pubkey KEY --require-signature`.
+  Keep the key readable only by a dedicated user, and ship `<log>.sig` off-host if you
+  need to detect truncation of log and signatures together.
 - **Atomic writes**: Each JSONL line is written in a single `write_all` call to reduce
   the crash-window for partial writes.
 

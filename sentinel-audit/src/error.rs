@@ -16,4 +16,7 @@ pub enum AuditError {
 
     #[error("Invalid event data: {0}")]
     InvalidEvent(String),
+
+    #[error("Audit signing error: {0}")]
+    Signing(String),
 }

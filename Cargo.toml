@@ -51,6 +51,8 @@ chrono = { version = "0.4", features = ["serde"] }
 sha2 = "0.10"
 hmac = "0.12"
 hex = "0.4"
+ed25519-dalek = "2.1"
+getrandom = "0.2"
 rustls-pemfile = "2.0"
 
 # CLI

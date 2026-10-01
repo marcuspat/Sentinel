@@ -28,9 +28,15 @@ impl AuditSink {
         crate::store::restrict_dir_permissions(&dir);
         let session_id = Uuid::new_v4();
         let path = dir.join(format!("{prefix}-{session_id}.jsonl"));
+        // Signed when $SENTINEL_AUDIT_KEY names a key file (ADR-015).  A
+        // configured-but-unusable key refuses to start rather than logging
+        // unsigned.
+        let log = AuditLog::new(session_id, Some(path.clone()))
+            .with_signer_from_env()
+            .map_err(std::io::Error::other)?;
         Ok(Self {
             session_id,
-            log: Mutex::new(AuditLog::new(session_id, Some(path.clone()))),
+            log: Mutex::new(log),
             path,
         })
     }

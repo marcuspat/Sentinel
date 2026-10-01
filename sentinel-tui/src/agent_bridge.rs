@@ -106,7 +106,9 @@ async fn run_inner(
 
     let policy = Arc::new(default_policy());
     let audit_path = std::path::PathBuf::from(format!("sentinel-audit-{session_id}.jsonl"));
-    let audit = Arc::new(Mutex::new(AuditLog::new(session_id, Some(audit_path))));
+    let audit = Arc::new(Mutex::new(
+        AuditLog::new(session_id, Some(audit_path)).with_signer_from_env()?,
+    ));
 
     let agent = ReasoningLoop::new(
         backend,

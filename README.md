@@ -89,7 +89,8 @@ cargo build --release --target x86_64-unknown-linux-musl
 | `sentinel run GOAL [--host HOST] [--dry-run]` | Non-interactive run |
 | `sentinel capabilities` | List all built-in capabilities |
 | `sentinel policy` | Show default policy rules |
-| `sentinel verify-audit PATH` | Verify audit log chain integrity |
+| `sentinel verify-audit PATH [--pubkey HEX\|FILE] [--require-signature]` | Verify audit log chain integrity, and its signed checkpoints when a public key is given |
+| `sentinel audit-keygen --out FILE` | Generate an Ed25519 audit-signing key; set `SENTINEL_AUDIT_KEY=FILE` to sign every audit log |
 | `sentinel serve --mcp [--state-dir DIR] [--host HOST]` | Run as an MCP policy gate for coding agents (stdio) |
 | `sentinel plans` / `sentinel show-plan ID` | List / inspect plans proposed through the gate |
 | `sentinel approve ID` | Operator approval of a proposed plan (interactive terminal required) |

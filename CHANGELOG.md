@@ -7,6 +7,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Security
+- **Signed audit checkpoints (ADR-015).** The hash chain alone could not tell
+  a genuine log from one rewritten wholesale: the hashes are unkeyed, so a
+  forged but consistent chain verified as `VALID`. With `SENTINEL_AUDIT_KEY`
+  set, every audit event is now followed by an Ed25519-signed checkpoint of
+  the chain head in the sidecar `<log>.sig`. `sentinel verify-audit PATH
+  --pubkey HEX|FILE` checks them against the operator's public key and fails on
+  a rewritten chain, a foreign signing key, or a truncated log;
+  `--require-signature` also fails on a missing sidecar or unsigned tail. New
+  `sentinel audit-keygen --out FILE` (mode 0600, never overwrites). A key that
+  is configured but unusable stops the process instead of logging unsigned.
+  Not covered, by design and documented: an attacker who can read the signing
+  key, and truncation of log and sidecar together without an off-host copy of
+  the latest checkpoint
 - **Prompt-injection hardening (ADR-014).** Capability output is now
   *spotlighted*: wrapped in nonce-tagged `UNTRUSTED-DATA` fences with forged
   fences neutralised, and both system prompts tell the model that fenced
