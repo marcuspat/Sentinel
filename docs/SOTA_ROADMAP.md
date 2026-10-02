@@ -34,7 +34,7 @@ milestones M2–M3) and the "Known Limitations" section of `SECURITY.md`.
 - [x] **2. Real sandbox: network and environment.** seccomp filter denying inet/raw sockets for every command but the package managers; children start from an empty environment with a fixed `PATH`; dangerous overrides refused. *497 → 506 tests.*
 - [x] **3. Provider-native tool use: Anthropic.** Argument schemas on every capability, `complete_with_tools` on the backend trait, Anthropic `tools`/`tool_use`, one call per turn, text never executed (ADR-017). *506 → 527 tests.*
 - [x] **4. Provider-native tool use: OpenAI and Ollama.** OpenAI function calling (default on for api.openai.com, opt-in for compatible servers); Ollama tool calling (opt-in, cannot force a call); shared tool conversion; text fallback unchanged. *527 → 538 tests.*
-- [ ] **5. Policy file loading.** `--policy FILE` (TOML) for `run`, `tui`, `serve`, `execute`, `policy`; strict parsing (unknown keys rejected); a file can add rules and tighten, and the built-in resource guards and kill switch cannot be switched off from it. (SPEC A.7 #4)
+- [x] **5. Policy file loading.** `--policy FILE` / `$SENTINEL_POLICY` (TOML) for every command; `tighten` mode can only make decisions stricter, `replace` is explicit and loud; guards and kill switch untouchable; strict parsing; fails closed (ADR-018). *538 → 552 tests.*
 - [ ] **6. Plan-store locking.** `flock` around read-modify-write in `PlanStore` to close the concurrent-`execute` race; test with two processes. (SPEC A.7 #5)
 - [ ] **7. One plan executor.** Extract the executor shared by `ReasoningLoop::execute_plan` and `sentinel execute`; settle one `RequireApproval` meaning (today `sentinel run` skips Medium-risk mutating steps even after approval). Regression tests for both paths. (SPEC A.7 #2)
 - [ ] **8. Rollback.** On step failure, call `invoke_inverse` for completed steps in reverse order, audited as `CapabilityRolledBack`; `--no-rollback` opt-out. (SPEC A.7 #3)
@@ -44,6 +44,8 @@ milestones M2–M3) and the "Known Limitations" section of `SECURITY.md`.
 - [ ] **12. TUI pending-plans tab.** List `PendingApproval` gate plans with approve / reject, reusing `PlanStore`. (SPEC A.7 #1)
 - [ ] **13. Supply chain.** Toolchain bump policy (CI is pinned to 1.97.0; 1.99's `double_must_use` fires in `async-trait` output — update or allow it, then bump). `cargo-deny` (advisories, licences, sources) and `cargo audit` in CI, pinned action SHAs, CycloneDX SBOM and build provenance attestation on release.
 - [ ] **14. Property tests and fuzzing.** `proptest` for the policy evaluator (deny-by-default holds for arbitrary requests), the untrusted-data fence (no input can forge or close a fence), and audit-chain verification; `cargo-fuzz` targets for the MCP JSON-RPC parser.
+- [ ] **14b. Resource guard coverage.** Guards read only `args.path` / `args.service`: `log_vacuum.log_dir` and `cache_prune.cache_dirs` are never checked, `sshd.service` / `ssh` bypass the `sshd` guard, and paths are not normalised (`/etc/../etc`, `//etc`). Make guards inspect every path- and service-typed argument, normalise, and match unit-name variants.
+- [ ] **14c. Policy provenance in the audit log.** Record a hash of the effective policy (file path, mode, rule ids) at session start so a chain proves which policy was in force.
 - [ ] **15. Release wrap-up.** README, `SECURITY.md`, CHANGELOG and ADR index brought in line with what shipped; version bump to 0.2.0; PR description rewritten as a release summary.
 
 If the backlog empties early, the remaining loops audit the code for new
@@ -61,3 +63,4 @@ fixing them.
 | 3 | Network denial + environment scrub | *(fourth feature commit)* | 506 | Fixed `PATH` assumes a conventional layout (not NixOS); socket-family denial is not a network namespace |
 | 4 | Anthropic native tool use | *(fifth feature commit)* | 527 | Wire format tested with `wiremock` only; never sent to the live API. Schema test caught a wrong `cache_prune` schema before it shipped |
 | 5 | OpenAI + Ollama tool use | *(sixth feature commit)* | 538 | `wiremock` only. OpenAI backend still sends `max_tokens` (newer models want `max_completion_tokens`); Ollama is not selectable from the CLI |
+| 6 | Policy files | *(seventh feature commit)* | 552 | Found resource guards miss `log_dir` / `cache_dirs` and unit-name variants (item 14b). Policy file is not yet hashed into the audit log (14c) |

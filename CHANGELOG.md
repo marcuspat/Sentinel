@@ -86,6 +86,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   now capped per observation
 
 ### Added
+- **Policy files (ADR-018).** `--policy FILE` / `$SENTINEL_POLICY` loads
+  operator rules and resource guards from TOML for `run`, the TUI,
+  `serve --mcp`, `execute` and `policy`. In the default `tighten` mode file
+  rules can only make the built-in decision stricter (an `allow` rule is
+  rejected at load time); `mode = "replace"` swaps the built-in rules and is
+  announced on every start. The kill switch, the built-in resource guards and
+  deny-by-default cannot be changed from a file. Unknown keys, a missing or
+  group/world-writable file all stop the process; there is no fallback to the
+  default policy. `sentinel policy` now prints the effective policy including
+  guards
 - **Provider-native tool use for Anthropic (ADR-017).** Investigation and
   planning now go through `tools` / `tool_use` instead of a JSON object dug out
   of response text: one tool per capability with its argument schema, plus

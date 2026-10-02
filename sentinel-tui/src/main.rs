@@ -21,14 +21,14 @@ use sentinel_capabilities::all_capabilities;
 use sentinel_core::{ApprovalDecision, CapabilityResult, ExecutionContext};
 use sentinel_exec::HardenedExecutor;
 use sentinel_fleet::{execute_on_fleet, FleetConfig};
-use sentinel_policy::{default_policy, RuleCondition};
+use sentinel_policy::RuleCondition;
 use uuid::Uuid;
 
 use sentinel_tui::{
     agent_bridge::{run_agent_session, AgentConfig},
     app::App,
     event_handler::{handle_events, AppEvent},
-    ui,
+    policy_source, ui,
 };
 
 mod gate_cmd;
@@ -50,6 +50,11 @@ struct Cli {
     /// OpenAI API key (can also be set via OPENAI_API_KEY env var)
     #[arg(long, env = "OPENAI_API_KEY", global = true)]
     openai_api_key: Option<String>,
+
+    /// Policy file (TOML).  Its rules tighten the built-in policy; see
+    /// `sentinel policy` for the result
+    #[arg(long, env = "SENTINEL_POLICY", global = true)]
+    policy: Option<std::path::PathBuf>,
 
     /// LLM backend to use
     #[arg(long, default_value = "anthropic", global = true)]
@@ -178,6 +183,7 @@ enum Commands {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    policy_source::set_path(cli.policy.clone());
 
     // Logs always go to stderr: stdout is reserved for command output and,
     // under `serve --mcp`, for the JSON-RPC stream.
@@ -221,7 +227,7 @@ async fn main() -> Result<()> {
             state_dir,
             step_timeout_ms,
         } => gate_cmd::execute(plan_id, state_dir, step_timeout_ms).await?,
-        Commands::Policy => show_policy(),
+        Commands::Policy => show_policy()?,
         Commands::VerifyAudit {
             path,
             pubkey,
@@ -407,7 +413,7 @@ async fn run_agent(
     let registry = Arc::new(registry);
 
     // 4. Policy + audit log (persisted to a per-session JSONL file).
-    let policy = Arc::new(default_policy());
+    let policy = Arc::new(policy_source::load()?);
     let audit_path = std::path::PathBuf::from(format!("sentinel-audit-{session_id}.jsonl"));
     let audit = Arc::new(Mutex::new(
         AuditLog::new(session_id, Some(audit_path.clone())).with_signer_from_env()?,
@@ -580,46 +586,79 @@ fn list_capabilities() {
     }
 }
 
-fn show_policy() {
-    let evaluator = default_policy();
+fn show_policy() -> Result<()> {
+    let evaluator = policy_source::load()?;
     let rules = evaluator.rules();
-
-    println!(
-        "Default Sentinel policy (deny-by-default) — {} rule(s):",
-        rules.len()
-    );
-    println!("{:-<78}", "");
-    println!(
-        "  {:<5} {:<33} {:<16} Conditions",
-        "Prio", "Rule ID", "Effect"
-    );
-    println!("{:-<78}", "");
-
-    for rule in rules {
-        let conditions = if rule.conditions.is_empty() {
-            "<always matches>".to_string()
-        } else {
-            rule.conditions
-                .iter()
-                .map(describe_condition)
-                .collect::<Vec<_>>()
-                .join(" AND ")
-        };
-        let effect = if rule.enabled {
-            format!("{:?}", rule.effect)
-        } else {
-            format!("{:?} (disabled)", rule.effect)
-        };
+    let print_rules = |rules: &[sentinel_policy::PolicyRule]| {
+        println!("{:-<78}", "");
         println!(
-            "  {:<5} {:<33} {:<16} {}",
-            rule.priority, rule.id, effect, conditions
+            "  {:<5} {:<33} {:<16} Conditions",
+            "Prio", "Rule ID", "Effect"
         );
-        println!("        {}", rule.description);
-    }
+        println!("{:-<78}", "");
+        for rule in rules {
+            let conditions = if rule.conditions.is_empty() {
+                "<always matches>".to_string()
+            } else {
+                rule.conditions
+                    .iter()
+                    .map(describe_condition)
+                    .collect::<Vec<_>>()
+                    .join(" AND ")
+            };
+            let effect = if rule.enabled {
+                format!("{:?}", rule.effect)
+            } else {
+                format!("{:?} (disabled)", rule.effect)
+            };
+            println!(
+                "  {:<5} {:<33} {:<16} {}",
+                rule.priority, rule.id, effect, conditions
+            );
+            println!("        {}", rule.description);
+        }
+        println!("{:-<78}", "");
+    };
 
-    println!("{:-<78}", "");
+    match policy_source::path() {
+        Some(path) => println!(
+            "Sentinel policy from {} (deny-by-default) — {} rule(s):",
+            path.display(),
+            rules.len()
+        ),
+        None => println!(
+            "Default Sentinel policy (deny-by-default) — {} rule(s):",
+            rules.len()
+        ),
+    }
+    print_rules(rules);
     println!("Rules are evaluated in ascending priority order; the first match wins.");
     println!("Any request not matched by an Allow/AuditOnly rule is denied by default.");
+
+    let tightening = evaluator.tightening_rules();
+    if !tightening.is_empty() {
+        println!();
+        println!(
+            "Tightening rules from the policy file — {} rule(s):",
+            tightening.len()
+        );
+        print_rules(tightening);
+        println!("Applied after the rules above; the stricter outcome wins, never the weaker.");
+    }
+
+    println!();
+    println!("Resource guards (checked before any rule; mutating requests only):");
+    for guard in evaluator.resource_guards() {
+        let mut protects = Vec::new();
+        if !guard.protected_paths.is_empty() {
+            protects.push(format!("paths {}", guard.protected_paths.join(", ")));
+        }
+        if !guard.protected_services.is_empty() {
+            protects.push(format!("services {}", guard.protected_services.join(", ")));
+        }
+        println!("  {:<20} {}", guard.id, protects.join("; "));
+    }
+    Ok(())
 }
 
 /// Render a [`RuleCondition`] as a concise, human-readable predicate string.

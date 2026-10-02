@@ -16,6 +16,7 @@
 pub mod engine;
 pub mod error;
 pub mod evaluator;
+pub mod file;
 pub mod kill_switch;
 pub mod resource_guard;
 pub mod rules;
@@ -23,6 +24,7 @@ pub mod rules;
 pub use engine::default_policy;
 pub use error::PolicyError;
 pub use evaluator::{PolicyDecision, PolicyEffect, PolicyEvaluator, PolicyRequest};
+pub use file::{load_policy, LoadedPolicy, PolicyMode};
 pub use kill_switch::KillSwitch;
 pub use resource_guard::ResourceGuard;
 pub use rules::{PolicyRule, RuleCondition, RuleEffect};

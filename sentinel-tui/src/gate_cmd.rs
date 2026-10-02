@@ -20,7 +20,7 @@ use sentinel_mcp::{
     default_state_dir, execute_approved_plan, index_capabilities, plan_status_json, AuditSink,
     Gate, GateConfig, PlanStatus, PlanStore, StoredPlan,
 };
-use sentinel_policy::default_policy;
+use sentinel_tui::policy_source;
 
 fn resolve_state_dir(state_dir: Option<PathBuf>) -> PathBuf {
     state_dir.unwrap_or_else(default_state_dir)
@@ -40,7 +40,7 @@ pub async fn serve(mcp: bool, state_dir: Option<PathBuf>, host: String) -> Resul
     let mut config = GateConfig::new(&state_dir);
     config.host = host;
     let caps = all_capabilities(Arc::new(HardenedExecutor::for_builtin_capabilities()));
-    let gate = Gate::new(config, caps, default_policy())?;
+    let gate = Gate::new(config, caps, policy_source::load()?)?;
     tracing::info!(
         state_dir = %state_dir.display(),
         audit = %gate.audit().path().display(),
@@ -185,7 +185,7 @@ pub async fn execute(
     let caps = index_capabilities(all_capabilities(Arc::new(
         HardenedExecutor::for_builtin_capabilities(),
     )));
-    let policy = default_policy();
+    let policy = policy_source::load()?;
     let audit = AuditSink::create(&state_dir, "execute")?;
     let report =
         execute_approved_plan(&store, plan_id, &caps, &policy, &audit, step_timeout_ms).await?;

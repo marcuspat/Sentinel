@@ -20,7 +20,6 @@ use sentinel_audit::AuditLog;
 use sentinel_capabilities::all_capabilities;
 use sentinel_core::{ApprovalDecision, SessionPhase};
 use sentinel_exec::HardenedExecutor;
-use sentinel_policy::default_policy;
 
 use crate::app::{
     ApprovalOutcome, ApprovalRequest, LogEntry, LogLevel, Plan, PlanStep, SessionUpdate, StepStatus,
@@ -104,7 +103,7 @@ async fn run_inner(
     }
     let registry = Arc::new(registry);
 
-    let policy = Arc::new(default_policy());
+    let policy = Arc::new(crate::policy_source::load()?);
     let audit_path = std::path::PathBuf::from(format!("sentinel-audit-{session_id}.jsonl"));
     let audit = Arc::new(Mutex::new(
         AuditLog::new(session_id, Some(audit_path)).with_signer_from_env()?,

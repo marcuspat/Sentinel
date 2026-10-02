@@ -48,7 +48,7 @@ pub fn default_policy_with_kill_switch(kill_switch: Arc<KillSwitch>) -> PolicyEv
 
 // ── Default rules ─────────────────────────────────────────────────────────────
 
-fn default_rules() -> Vec<PolicyRule> {
+pub(crate) fn default_rules() -> Vec<PolicyRule> {
     vec![
         // ── Highest priority: hard denials ────────────────────────────────────
         PolicyRule {
