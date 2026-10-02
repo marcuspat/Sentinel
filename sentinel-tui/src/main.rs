@@ -19,9 +19,8 @@ use sentinel_agent_llm::{
 };
 use sentinel_audit::AuditLog;
 use sentinel_capabilities::all_capabilities;
-use sentinel_core::{ApprovalDecision, CapabilityResult, ExecutionContext};
+use sentinel_core::ApprovalDecision;
 use sentinel_exec::HardenedExecutor;
-use sentinel_fleet::{execute_on_fleet, FleetConfig};
 use sentinel_policy::RuleCondition;
 use uuid::Uuid;
 
@@ -32,6 +31,7 @@ use sentinel_tui::{
     policy_source, ui,
 };
 
+mod fleet_cmd;
 mod gate_cmd;
 
 #[derive(Parser)]
@@ -126,6 +126,23 @@ enum Commands {
         /// JSON arguments object for the capability
         #[arg(long, default_value = "{}")]
         args: String,
+        /// Approve a run that policy marks as requiring operator approval
+        #[arg(long)]
+        approve: bool,
+    },
+    /// Host side of `sentinel fleet`: run one capability under this host's
+    /// policy and print its result as JSON.  Invoked over SSH
+    #[command(hide = true)]
+    AgentExec {
+        capability: String,
+        /// JSON arguments object
+        #[arg(default_value = "{}")]
+        args: String,
+        /// The operator approved this run on the controller
+        #[arg(long)]
+        approved: bool,
+        #[arg(long, env = "SENTINEL_STATE_DIR")]
+        state_dir: Option<std::path::PathBuf>,
     },
     /// Launch the interactive TUI
     Tui {
@@ -245,7 +262,14 @@ async fn main() -> Result<()> {
             hosts,
             capability,
             args,
-        } => run_fleet(goal, hosts, capability, args).await?,
+            approve,
+        } => fleet_cmd::run_fleet(goal, hosts, capability, args, approve).await?,
+        Commands::AgentExec {
+            capability,
+            args,
+            approved,
+            state_dir,
+        } => fleet_cmd::agent_exec(capability, args, approved, state_dir).await?,
         Commands::Run {
             goal,
             host,
@@ -518,71 +542,6 @@ async fn run_agent(
     );
     println!("Audit log written to {}", audit_path.display());
 
-    Ok(())
-}
-
-/// Run a capability across multiple hosts in parallel over SSH and print
-/// per-host results.
-async fn run_fleet(
-    goal: String,
-    hosts: Vec<String>,
-    capability: String,
-    args: String,
-) -> Result<()> {
-    if hosts.is_empty() {
-        return Err(anyhow::anyhow!(
-            "no hosts specified; pass --hosts host1,host2[,...]"
-        ));
-    }
-
-    let parsed_args: std::collections::HashMap<String, serde_json::Value> =
-        serde_json::from_str(&args)
-            .map_err(|e| anyhow::anyhow!("--args must be a JSON object: {e}"))?;
-
-    let config = FleetConfig::from_specs(&hosts);
-    let session_id = Uuid::new_v4();
-    let ctx = ExecutionContext::new(session_id, "fleet");
-
-    println!("Fleet run: {goal}");
-    println!("Capability : {capability}");
-    println!("Hosts ({}) : {}", config.len(), hosts.join(", "));
-    println!();
-
-    let results = execute_on_fleet(&config, &capability, &parsed_args, &ctx).await;
-
-    let mut hostnames: Vec<&String> = results.keys().collect();
-    hostnames.sort();
-
-    let mut ok = 0usize;
-    let mut failed = 0usize;
-    for hostname in hostnames {
-        match &results[hostname] {
-            CapabilityResult::Success { output } => {
-                ok += 1;
-                println!("✔ {hostname}: success");
-                if let Ok(pretty) = serde_json::to_string(output) {
-                    println!("    {pretty}");
-                }
-            }
-            CapabilityResult::Failure { error, .. } => {
-                failed += 1;
-                println!("x {hostname}: FAILED — {error}");
-            }
-            CapabilityResult::DryRun { predicted_effect } => {
-                ok += 1;
-                println!("• {hostname}: dry-run");
-                if let Ok(pretty) = serde_json::to_string(predicted_effect) {
-                    println!("    {pretty}");
-                }
-            }
-        }
-    }
-
-    println!();
-    println!(
-        "Fleet summary: {ok} succeeded, {failed} failed across {} host(s).",
-        config.len()
-    );
     Ok(())
 }
 

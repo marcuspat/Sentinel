@@ -3,6 +3,7 @@ use std::sync::Arc;
 use rcgen::{BasicConstraints, Certificate, CertificateParams, IsCa, KeyUsagePurpose, SanType};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 
 use crate::error::FleetError;
 
@@ -218,12 +219,33 @@ impl FleetTls {
 #[derive(Debug)]
 struct PinnedFingerprintVerifier {
     pinned: String,
+    /// The pin as raw bytes; `None` when it does not parse, in which case
+    /// every certificate is rejected.
+    pinned_digest: Option<[u8; 32]>,
 }
 
 impl PinnedFingerprintVerifier {
     fn new(pinned: String) -> Self {
-        Self { pinned }
+        let pinned_digest = parse_fingerprint(&pinned);
+        Self {
+            pinned,
+            pinned_digest,
+        }
     }
+}
+
+/// Parse a SHA-256 fingerprint: 64 hex digits, colons and case ignored.
+fn parse_fingerprint(text: &str) -> Option<[u8; 32]> {
+    let hex_only: String = text.chars().filter(|c| *c != ':').collect();
+    hex::decode(hex_only).ok()?.try_into().ok()
+}
+
+fn format_fingerprint(digest: &[u8; 32]) -> String {
+    digest
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(":")
 }
 
 impl rustls::client::danger::ServerCertVerifier for PinnedFingerprintVerifier {
@@ -235,24 +257,24 @@ impl rustls::client::danger::ServerCertVerifier for PinnedFingerprintVerifier {
         _ocsp: &[u8],
         _now: rustls::pki_types::UnixTime,
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        let mut hasher = Sha256::new();
-        hasher.update(end_entity.as_ref());
-        let digest = hasher.finalize();
-        let fingerprint = digest
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<Vec<_>>()
-            .join(":");
+        let digest: [u8; 32] = Sha256::digest(end_entity.as_ref()).into();
 
-        // Note: the FleetTls::cert_fingerprint computes SHA-256 of the DER bytes
-        // (same as what we compute here from CertificateDer).
-        if fingerprint == self.pinned {
-            Ok(rustls::client::danger::ServerCertVerified::assertion())
-        } else {
-            Err(rustls::Error::General(format!(
+        // Compare raw digests in constant time.  The pin is not a secret,
+        // but a comparison that does not depend on where the first
+        // difference lies leaves nothing to reason about.
+        match self.pinned_digest {
+            Some(pinned) if bool::from(pinned.ct_eq(&digest)) => {
+                Ok(rustls::client::danger::ServerCertVerified::assertion())
+            }
+            Some(_) => Err(rustls::Error::General(format!(
                 "certificate fingerprint mismatch: expected {} got {}",
-                self.pinned, fingerprint
-            )))
+                self.pinned,
+                format_fingerprint(&digest)
+            ))),
+            None => Err(rustls::Error::General(format!(
+                "pinned fingerprint {:?} is not a SHA-256 digest (64 hex digits, optionally colon-separated)",
+                self.pinned
+            ))),
         }
     }
 
@@ -400,5 +422,49 @@ mod tests {
             .join(":");
 
         FleetTls::client_config(&client_pem, &client_key, &fp).expect("client_config must build");
+    }
+
+    // ── Fingerprint pin parsing and comparison ────────────────────────────────
+
+    #[test]
+    fn fingerprint_parsing_ignores_colons_and_case() {
+        let digest = [0xabu8; 32];
+        let colon = format_fingerprint(&digest);
+        assert_eq!(parse_fingerprint(&colon), Some(digest));
+        assert_eq!(parse_fingerprint(&colon.to_uppercase()), Some(digest));
+        assert_eq!(parse_fingerprint(&"ab".repeat(32)), Some(digest));
+        for bad in ["", "ab", "zz:zz", &"ab".repeat(31), &"ab".repeat(33)] {
+            assert_eq!(parse_fingerprint(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn malformed_pin_rejects_every_certificate() {
+        use rustls::client::danger::ServerCertVerifier;
+        let (ca, _ca_pem) = FleetTls::generate_ca("ca").unwrap();
+        let (cert_pem, _) = FleetTls::generate_node_cert(&ca, "n", vec![]).unwrap();
+        let der = rustls_pemfile::certs(&mut cert_pem.as_bytes())
+            .next()
+            .unwrap()
+            .unwrap();
+        let name = rustls::pki_types::ServerName::try_from("n").unwrap();
+        let now = rustls::pki_types::UnixTime::now();
+
+        let good = FleetTls::cert_fingerprint(&cert_pem).unwrap();
+        // Upper-case pin for the right certificate is accepted.
+        let v = PinnedFingerprintVerifier::new(good.to_uppercase());
+        assert!(v.verify_server_cert(&der, &[], &name, &[], now).is_ok());
+        // A pin that is not a digest never matches anything.
+        let v = PinnedFingerprintVerifier::new("not-a-fingerprint".into());
+        let err = v
+            .verify_server_cert(&der, &[], &name, &[], now)
+            .unwrap_err();
+        assert!(err.to_string().contains("not a SHA-256 digest"), "{err}");
+        // A well-formed pin for a different certificate is a mismatch.
+        let v = PinnedFingerprintVerifier::new(format_fingerprint(&[0u8; 32]));
+        let err = v
+            .verify_server_cert(&der, &[], &name, &[], now)
+            .unwrap_err();
+        assert!(err.to_string().contains("mismatch"), "{err}");
     }
 }

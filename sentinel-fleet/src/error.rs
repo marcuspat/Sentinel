@@ -19,6 +19,9 @@ pub enum FleetError {
     #[error("Rollout halted at stage {stage}: {reason}")]
     RolloutHalted { stage: usize, reason: String },
 
+    #[error("Not implemented: {0}")]
+    NotImplemented(&'static str),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }

@@ -105,8 +105,8 @@ Every production path runs commands through `HardenedExecutor` (ADR-016):
 - Network denial blocks socket families, not a network namespace: Unix-socket access to
   local daemons remains.
 - The fixed child `PATH` assumes a conventional filesystem layout (not NixOS/Guix).
-- The TLS fingerprint comparison in `PinnedFingerprintVerifier` uses string equality on
-  hex-encoded bytes. For use cases requiring constant-time comparison, replace with
-  `subtle::ConstantTimeEq` on the raw digest bytes.
+- `sentinel fleet` trusts SSH authentication to carry the operator's approval to each host,
+  and uses `StrictHostKeyChecking=accept-new` (trust on first use). The mTLS controller
+  protocol is not implemented.
 - `GENESIS_HASH` is defined as 64 zero characters (an arbitrary sentinel value), not
   `SHA-256("")`. External audit tools must use the same convention.

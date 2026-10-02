@@ -7,6 +7,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Security
+- **`sentinel fleet` ran outside policy, approval and audit (ADR-022).** The
+  fleet path consulted no policy, asked for no approval and wrote no audit
+  event. It now evaluates policy per host on the controller, dispatches nothing
+  when approval is required and `--approve` is absent, and audits the run; each
+  host re-checks under its own policy in the new `sentinel agent-exec`
+- **Local command execution via `--hosts` (ADR-022).** A host spec such as
+  `-oProxyCommand=…` was passed to `ssh` as an option and ran a command on the
+  controller. Hostnames, users and key paths are now validated, and `ssh` is
+  called with `--` before the destination
+- **Remote command injection via `--capability` (ADR-022).** The capability id
+  was interpolated unquoted into the remote shell command. It is now validated
+  and every part of the remote command is quoted
 - **Child processes no longer inherit Sentinel's environment (ADR-016).**
   Allowlisted program names were resolved through whatever `PATH` Sentinel was
   started with, so a poisoned `PATH` decided what `rm` or `systemctl` meant.
@@ -74,6 +86,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `SuspectedPromptInjection` event
 
 ### Fixed
+- **`sentinel fleet` could not work.** It invoked `sentinel agent-exec` on each
+  host, a subcommand that did not exist. It exists now
+- Fleet `AgentClient::register` / `heartbeat` returned success without doing
+  anything; they now return `NotImplemented`
+- The TLS fingerprint pin is compared as raw bytes in constant time, ignoring
+  case and colons; a malformed pin rejects every certificate
 - **`sentinel run` never performed approved mutating steps (ADR-019).** With
   the default policy every Medium-risk mutating capability evaluates to
   `RequiresApproval`; the loop's executor treated that as a refusal even after
