@@ -9,7 +9,7 @@ use sentinel_core::{
 };
 use sentinel_exec::{CommandExecutorTrait, FsAccess};
 
-const VALID_METRICS: &[&str] = &["cpu", "memory", "disk", "load"];
+pub(crate) const VALID_METRICS: &[&str] = &["cpu", "memory", "disk", "load"];
 
 // ─── SystemMetrics ───────────────────────────────────────────────────────────
 
@@ -94,6 +94,10 @@ impl SystemMetrics {
 impl Capability for SystemMetrics {
     fn manifest(&self) -> &CapabilityManifest {
         &self.manifest
+    }
+
+    fn args_schema(&self) -> Value {
+        crate::schemas::args_schema(&self.manifest.id).unwrap_or_else(|| json!({"type": "object"}))
     }
 
     fn validate_args(&self, args: &Value) -> Result<(), CoreError> {

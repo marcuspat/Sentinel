@@ -121,6 +121,10 @@ impl Capability for PackageList {
         &self.manifest
     }
 
+    fn args_schema(&self) -> Value {
+        crate::schemas::args_schema(&self.manifest.id).unwrap_or_else(|| json!({"type": "object"}))
+    }
+
     fn validate_args(&self, args: &Value) -> Result<(), CoreError> {
         if let Some(f) = args.get("filter") {
             if !f.is_string() {
@@ -227,6 +231,10 @@ impl PackageUpgrade {
 impl Capability for PackageUpgrade {
     fn manifest(&self) -> &CapabilityManifest {
         &self.manifest
+    }
+
+    fn args_schema(&self) -> Value {
+        crate::schemas::args_schema(&self.manifest.id).unwrap_or_else(|| json!({"type": "object"}))
     }
 
     fn validate_args(&self, args: &Value) -> Result<(), CoreError> {

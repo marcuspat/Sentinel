@@ -8,7 +8,9 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-use crate::backend::{LlmBackend, LlmResponse, Message, MessageRole};
+use crate::backend::{
+    LlmBackend, LlmResponse, Message, MessageRole, ToolCall, ToolChoice, ToolResponse, ToolSpec,
+};
 use crate::error::AgentError;
 
 // ── Request / response types ──────────────────────────────────────────────────
@@ -20,6 +22,10 @@ struct AnthropicRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     system: Option<&'a str>,
     messages: Vec<AnthropicMessage<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<&'a [ToolSpec]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -43,6 +49,10 @@ struct AnthropicContent {
     #[serde(rename = "type")]
     content_type: String,
     text: Option<String>,
+    /// Present on `tool_use` blocks.
+    name: Option<String>,
+    /// Present on `tool_use` blocks.
+    input: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -93,26 +103,14 @@ impl AnthropicBackend {
         }
     }
 
-    fn messages_url(&self) -> String {
-        format!("{}/v1/messages", self.base_url.trim_end_matches('/'))
-    }
-}
-
-#[async_trait]
-impl LlmBackend for AnthropicBackend {
-    fn name(&self) -> &str {
-        "anthropic"
-    }
-
-    fn model(&self) -> &str {
-        &self.model
-    }
-
-    async fn complete(
+    /// POST one Messages request and decode the response.
+    async fn send(
         &self,
-        messages: Vec<Message>,
+        messages: &[Message],
         max_tokens: u32,
-    ) -> Result<LlmResponse, AgentError> {
+        tools: Option<&[ToolSpec]>,
+        tool_choice: Option<serde_json::Value>,
+    ) -> Result<AnthropicResponse, AgentError> {
         // Separate system message (Anthropic puts it in a top-level field).
         let system_content: Option<String> = messages
             .iter()
@@ -133,6 +131,8 @@ impl LlmBackend for AnthropicBackend {
             max_tokens,
             system: system_content.as_deref(),
             messages: non_system,
+            tools,
+            tool_choice,
         };
 
         debug!(model = %self.model, max_tokens, "sending Anthropic completion request");
@@ -180,10 +180,33 @@ impl LlmBackend for AnthropicBackend {
             });
         }
 
-        let api_response: AnthropicResponse = response
+        response
             .json()
             .await
-            .map_err(|e| AgentError::InvalidResponse(format!("failed to parse response: {e}")))?;
+            .map_err(|e| AgentError::InvalidResponse(format!("failed to parse response: {e}")))
+    }
+
+    fn messages_url(&self) -> String {
+        format!("{}/v1/messages", self.base_url.trim_end_matches('/'))
+    }
+}
+
+#[async_trait]
+impl LlmBackend for AnthropicBackend {
+    fn name(&self) -> &str {
+        "anthropic"
+    }
+
+    fn model(&self) -> &str {
+        &self.model
+    }
+
+    async fn complete(
+        &self,
+        messages: Vec<Message>,
+        max_tokens: u32,
+    ) -> Result<LlmResponse, AgentError> {
+        let api_response = self.send(&messages, max_tokens, None, None).await?;
 
         // Concatenate all text content blocks.
         let content_text: String = api_response
@@ -209,6 +232,70 @@ impl LlmBackend for AnthropicBackend {
 
         Ok(LlmResponse {
             content: content_text,
+            model: api_response.model,
+            input_tokens: api_response.usage.input_tokens,
+            output_tokens: api_response.usage.output_tokens,
+            finish_reason: api_response
+                .stop_reason
+                .unwrap_or_else(|| "end_turn".to_string()),
+        })
+    }
+
+    fn supports_tools(&self) -> bool {
+        true
+    }
+
+    async fn complete_with_tools(
+        &self,
+        messages: Vec<Message>,
+        tools: &[ToolSpec],
+        choice: ToolChoice,
+        max_tokens: u32,
+    ) -> Result<ToolResponse, AgentError> {
+        // One call per turn: the loop policy-checks and audits each
+        // invocation, so parallel tool use is switched off.
+        let tool_choice = match choice {
+            ToolChoice::Any => {
+                serde_json::json!({"type": "any", "disable_parallel_tool_use": true})
+            }
+            ToolChoice::Tool(name) => {
+                serde_json::json!({"type": "tool", "name": name, "disable_parallel_tool_use": true})
+            }
+        };
+
+        let api_response = self
+            .send(&messages, max_tokens, Some(tools), Some(tool_choice))
+            .await?;
+
+        let mut calls = Vec::new();
+        let mut text = String::new();
+        for block in api_response.content {
+            match block.content_type.as_str() {
+                "tool_use" => {
+                    let name = block.name.ok_or_else(|| {
+                        AgentError::InvalidResponse("tool_use block without a name".into())
+                    })?;
+                    calls.push(ToolCall {
+                        name,
+                        input: block.input.unwrap_or(serde_json::Value::Null),
+                    });
+                }
+                "text" => text.push_str(block.text.as_deref().unwrap_or("")),
+                _ => {}
+            }
+        }
+
+        debug!(
+            model = %api_response.model,
+            calls = calls.len(),
+            input_tokens = api_response.usage.input_tokens,
+            output_tokens = api_response.usage.output_tokens,
+            "Anthropic tool-use completion received"
+        );
+
+        Ok(ToolResponse {
+            calls,
+            text,
             model: api_response.model,
             input_tokens: api_response.usage.input_tokens,
             output_tokens: api_response.usage.output_tokens,
@@ -430,5 +517,176 @@ mod tests {
         let backend = AnthropicBackend::new("key".into(), "claude-3-opus-20240229".into());
         assert_eq!(backend.name(), "anthropic");
         assert_eq!(backend.model(), "claude-3-opus-20240229");
+    }
+
+    // ── Native tool use ──────────────────────────────────────────────────────
+
+    fn disk_tool() -> ToolSpec {
+        ToolSpec {
+            name: "disk_usage".into(),
+            description: "Report disk usage".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"]
+            }),
+        }
+    }
+
+    fn tool_backend(server: &MockServer) -> AnthropicBackend {
+        AnthropicBackend::with_base_url("test-key".into(), "claude-test".into(), server.uri())
+    }
+
+    #[tokio::test]
+    async fn tool_request_carries_tools_and_forces_a_single_call() {
+        use wiremock::matchers::body_partial_json;
+        let server = MockServer::start().await;
+        // The mock only answers when the request body has the tools array,
+        // the forced tool choice and parallel calls disabled.
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .and(body_partial_json(serde_json::json!({
+                "system": "sys",
+                "tools": [{
+                    "name": "disk_usage",
+                    "description": "Report disk usage",
+                    "input_schema": {"type": "object", "required": ["path"]}
+                }],
+                "tool_choice": {"type": "any", "disable_parallel_tool_use": true}
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "msg_1", "type": "message", "role": "assistant", "model": "claude-test",
+                "content": [
+                    {"type": "text", "text": "Checking the disk."},
+                    {"type": "tool_use", "id": "toolu_1", "name": "disk_usage", "input": {"path": "/var"}}
+                ],
+                "stop_reason": "tool_use",
+                "usage": {"input_tokens": 12, "output_tokens": 7}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let backend = tool_backend(&server);
+        assert!(backend.supports_tools());
+        let r = backend
+            .complete_with_tools(
+                vec![Message::system("sys"), Message::user("go")],
+                &[disk_tool()],
+                ToolChoice::Any,
+                256,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            r.calls,
+            vec![ToolCall {
+                name: "disk_usage".into(),
+                input: serde_json::json!({"path": "/var"})
+            }]
+        );
+        assert_eq!(r.text, "Checking the disk.");
+        assert_eq!(r.finish_reason, "tool_use");
+        assert_eq!((r.input_tokens, r.output_tokens), (12, 7));
+    }
+
+    #[tokio::test]
+    async fn named_tool_choice_is_sent() {
+        use wiremock::matchers::body_partial_json;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_partial_json(serde_json::json!({
+                "tool_choice": {"type": "tool", "name": "disk_usage"}
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "msg_1", "model": "claude-test",
+                "content": [{"type": "tool_use", "id": "t", "name": "disk_usage", "input": {}}],
+                "stop_reason": "tool_use",
+                "usage": {"input_tokens": 1, "output_tokens": 1}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let r = tool_backend(&server)
+            .complete_with_tools(
+                vec![Message::user("go")],
+                &[disk_tool()],
+                ToolChoice::Tool("disk_usage".into()),
+                64,
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.calls.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn text_only_answer_yields_no_calls() {
+        // The backend reports what the provider sent; rejecting a turn with
+        // no call is the reasoning loop's job (see tools.rs).
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(make_success_response(
+                    r#"{"capability_id": "service_stop", "args": {"service": "sshd"}}"#,
+                    "claude-test",
+                )),
+            )
+            .mount(&server)
+            .await;
+        let r = tool_backend(&server)
+            .complete_with_tools(
+                vec![Message::user("go")],
+                &[disk_tool()],
+                ToolChoice::Any,
+                64,
+            )
+            .await
+            .unwrap();
+        assert!(r.calls.is_empty());
+        assert!(r.text.contains("service_stop"));
+    }
+
+    #[tokio::test]
+    async fn tool_mode_surfaces_rate_limits_and_api_errors() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "7"))
+            .mount(&server)
+            .await;
+        let err = tool_backend(&server)
+            .complete_with_tools(
+                vec![Message::user("go")],
+                &[disk_tool()],
+                ToolChoice::Any,
+                64,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            AgentError::RateLimited {
+                retry_after_secs: 7
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn plain_completion_sends_no_tool_fields() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(make_success_response("hi", "claude-test")),
+            )
+            .mount(&server)
+            .await;
+        tool_backend(&server)
+            .complete(vec![Message::user("go")], 64)
+            .await
+            .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert!(body.get("tools").is_none());
+        assert!(body.get("tool_choice").is_none());
     }
 }

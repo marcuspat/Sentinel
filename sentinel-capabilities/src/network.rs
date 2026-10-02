@@ -58,6 +58,10 @@ impl Capability for NetworkConnections {
         &self.manifest
     }
 
+    fn args_schema(&self) -> Value {
+        crate::schemas::args_schema(&self.manifest.id).unwrap_or_else(|| json!({"type": "object"}))
+    }
+
     fn validate_args(&self, args: &Value) -> Result<(), CoreError> {
         if let Some(state) = args.get("state") {
             if !state.is_string() {
@@ -179,6 +183,10 @@ impl NetworkInterfaces {
 impl Capability for NetworkInterfaces {
     fn manifest(&self) -> &CapabilityManifest {
         &self.manifest
+    }
+
+    fn args_schema(&self) -> Value {
+        crate::schemas::args_schema(&self.manifest.id).unwrap_or_else(|| json!({"type": "object"}))
     }
 
     fn validate_args(&self, _args: &Value) -> Result<(), CoreError> {

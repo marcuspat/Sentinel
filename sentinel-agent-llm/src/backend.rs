@@ -70,6 +70,46 @@ pub struct LlmResponse {
     pub finish_reason: String,
 }
 
+/// A tool the model may call, in the provider-neutral shape every major API
+/// accepts: a name, a description and a JSON Schema for the input.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolSpec {
+    pub name: String,
+    pub description: String,
+    /// JSON Schema of type `object`.
+    pub input_schema: serde_json::Value,
+}
+
+/// Which tool the model must call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolChoice {
+    /// Any one of the offered tools; a plain-text answer is not acceptable.
+    Any,
+    /// Exactly this tool.
+    Tool(String),
+}
+
+/// One structured tool invocation returned by the model.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolCall {
+    pub name: String,
+    pub input: serde_json::Value,
+}
+
+/// Response from [`LlmBackend::complete_with_tools`].
+#[derive(Debug, Clone)]
+pub struct ToolResponse {
+    /// Structured calls, in the order the model produced them.
+    pub calls: Vec<ToolCall>,
+    /// Free text the model wrote alongside the calls.  Commentary only: it
+    /// is never parsed for actions.
+    pub text: String,
+    pub model: String,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub finish_reason: String,
+}
+
 /// The pluggable LLM backend trait.
 ///
 /// Implementors provide the concrete HTTP calls to a specific LLM service.
@@ -93,6 +133,30 @@ pub trait LlmBackend: Send + Sync {
         messages: Vec<Message>,
         max_tokens: u32,
     ) -> Result<LlmResponse, AgentError>;
+
+    /// Whether [`complete_with_tools`](Self::complete_with_tools) is
+    /// implemented.  When `false` the reasoning loop falls back to parsing
+    /// JSON out of free text.
+    fn supports_tools(&self) -> bool {
+        false
+    }
+
+    /// Like [`complete`](Self::complete), but the model must answer with a
+    /// structured call to one of `tools` (provider-native tool use /
+    /// function calling).
+    async fn complete_with_tools(
+        &self,
+        messages: Vec<Message>,
+        tools: &[ToolSpec],
+        choice: ToolChoice,
+        max_tokens: u32,
+    ) -> Result<ToolResponse, AgentError> {
+        let _ = (messages, tools, choice, max_tokens);
+        Err(AgentError::InvalidResponse(format!(
+            "backend '{}' does not support native tool use",
+            self.name()
+        )))
+    }
 
     /// Ping the backend to verify connectivity and credentials.
     async fn health_check(&self) -> Result<(), AgentError>;

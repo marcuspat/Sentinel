@@ -86,6 +86,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   now capped per observation
 
 ### Added
+- **Provider-native tool use for Anthropic (ADR-017).** Investigation and
+  planning now go through `tools` / `tool_use` instead of a JSON object dug out
+  of response text: one tool per capability with its argument schema, plus
+  `done_investigating` and `propose_plan`. Exactly one tool call per turn;
+  text is commentary and is never executed, so JSON a model is tricked into
+  *writing* is no longer an action. New `Capability::args_schema()` on all 14
+  built-ins and `LlmBackend::complete_with_tools`. `SENTINEL_NATIVE_TOOLS=off`
+  restores the text protocol. Tested against `wiremock` only; not yet run
+  against the live API
 - **MCP policy gate** (`sentinel-mcp` crate, ADR-013): `sentinel serve --mcp`
   speaks MCP over stdio and exposes five tools: `sentinel_capabilities`,
   `sentinel_policy_check` (dry policy evaluation with the matching rule),

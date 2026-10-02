@@ -40,6 +40,10 @@ impl Capability for ProcessList {
         &self.manifest
     }
 
+    fn args_schema(&self) -> Value {
+        crate::schemas::args_schema(&self.manifest.id).unwrap_or_else(|| json!({"type": "object"}))
+    }
+
     fn validate_args(&self, args: &Value) -> Result<(), CoreError> {
         if let Some(f) = args.get("filter") {
             if !f.is_string() {
@@ -149,6 +153,10 @@ impl Capability for ProcessKill {
         &self.manifest
     }
 
+    fn args_schema(&self) -> Value {
+        crate::schemas::args_schema(&self.manifest.id).unwrap_or_else(|| json!({"type": "object"}))
+    }
+
     fn validate_args(&self, args: &Value) -> Result<(), CoreError> {
         let pid = args
             .get("pid")
@@ -254,6 +262,10 @@ impl Capability for ServiceStatus {
         &self.manifest
     }
 
+    fn args_schema(&self) -> Value {
+        crate::schemas::args_schema(&self.manifest.id).unwrap_or_else(|| json!({"type": "object"}))
+    }
+
     fn validate_args(&self, args: &Value) -> Result<(), CoreError> {
         args.get("service")
             .and_then(Value::as_str)
@@ -337,6 +349,10 @@ impl ServiceRestart {
 impl Capability for ServiceRestart {
     fn manifest(&self) -> &CapabilityManifest {
         &self.manifest
+    }
+
+    fn args_schema(&self) -> Value {
+        crate::schemas::args_schema(&self.manifest.id).unwrap_or_else(|| json!({"type": "object"}))
     }
 
     fn validate_args(&self, args: &Value) -> Result<(), CoreError> {
@@ -469,6 +485,10 @@ impl Capability for ServiceStop {
         &self.manifest
     }
 
+    fn args_schema(&self) -> Value {
+        crate::schemas::args_schema(&self.manifest.id).unwrap_or_else(|| json!({"type": "object"}))
+    }
+
     fn validate_args(&self, args: &Value) -> Result<(), CoreError> {
         args.get("service")
             .and_then(Value::as_str)
@@ -552,6 +572,10 @@ impl ServiceStart {
 impl Capability for ServiceStart {
     fn manifest(&self) -> &CapabilityManifest {
         &self.manifest
+    }
+
+    fn args_schema(&self) -> Value {
+        crate::schemas::args_schema(&self.manifest.id).unwrap_or_else(|| json!({"type": "object"}))
     }
 
     fn validate_args(&self, args: &Value) -> Result<(), CoreError> {

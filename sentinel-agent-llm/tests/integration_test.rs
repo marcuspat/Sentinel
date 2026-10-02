@@ -161,6 +161,7 @@ fn fast_config() -> ReasoningConfig {
         max_investigation_rounds: 5,
         max_tokens_per_call: 512,
         investigation_timeout_ms: 10_000,
+        native_tool_use: true,
     }
 }
 

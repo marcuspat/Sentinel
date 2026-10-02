@@ -81,6 +81,10 @@ impl Capability for DiskUsage {
         &self.manifest
     }
 
+    fn args_schema(&self) -> Value {
+        crate::schemas::args_schema(&self.manifest.id).unwrap_or_else(|| json!({"type": "object"}))
+    }
+
     fn validate_args(&self, args: &Value) -> Result<(), CoreError> {
         args.get("path")
             .and_then(Value::as_str)
@@ -193,6 +197,10 @@ impl LogVacuum {
 impl Capability for LogVacuum {
     fn manifest(&self) -> &CapabilityManifest {
         &self.manifest
+    }
+
+    fn args_schema(&self) -> Value {
+        crate::schemas::args_schema(&self.manifest.id).unwrap_or_else(|| json!({"type": "object"}))
     }
 
     fn validate_args(&self, args: &Value) -> Result<(), CoreError> {
@@ -385,6 +393,10 @@ impl CachePrune {
 impl Capability for CachePrune {
     fn manifest(&self) -> &CapabilityManifest {
         &self.manifest
+    }
+
+    fn args_schema(&self) -> Value {
+        crate::schemas::args_schema(&self.manifest.id).unwrap_or_else(|| json!({"type": "object"}))
     }
 
     fn validate_args(&self, args: &Value) -> Result<(), CoreError> {

@@ -24,12 +24,13 @@ use sentinel_audit::{AuditEventType, AuditLog};
 use sentinel_core::{ApprovalDecision, Capability, ExecutionContext, Plan, StepStatus};
 use sentinel_policy::{PolicyEffect, PolicyEvaluator, PolicyRequest};
 
-use crate::backend::{LlmBackend, Message};
+use crate::backend::{LlmBackend, Message, ToolChoice};
 use crate::error::AgentError;
 use crate::planner::{
     CapabilityRegistry, CapabilityRequestParser, InvestigationAction, Observation, PlanParser,
 };
 use crate::prompt_builder::PromptBuilder;
+use crate::tools::{plan_document, plan_tool, InvestigationTools, PLAN_TOOL, TOOL_MODE_NOTE};
 use crate::untrusted::detect_injection_markers;
 
 // ── ReasoningConfig ───────────────────────────────────────────────────────────
@@ -46,6 +47,11 @@ pub struct ReasoningConfig {
 
     /// Wall-clock timeout (in milliseconds) for the entire investigation phase.
     pub investigation_timeout_ms: u64,
+
+    /// Use provider-native tool calls when the backend supports them
+    /// (ADR-017).  When `false`, or with a backend that lacks tool support,
+    /// the loop parses a JSON object out of the model's text.
+    pub native_tool_use: bool,
 }
 
 impl Default for ReasoningConfig {
@@ -54,8 +60,19 @@ impl Default for ReasoningConfig {
             max_investigation_rounds: 10,
             max_tokens_per_call: 4096,
             investigation_timeout_ms: 60_000,
+            native_tool_use: native_tools_enabled(std::env::var(NATIVE_TOOLS_ENV).ok().as_deref()),
         }
     }
+}
+
+/// Set to `off` to make every backend use the JSON-in-text protocol.
+pub const NATIVE_TOOLS_ENV: &str = "SENTINEL_NATIVE_TOOLS";
+
+fn native_tools_enabled(value: Option<&str>) -> bool {
+    !matches!(
+        value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("off") | Some("0") | Some("false") | Some("disabled")
+    )
 }
 
 // ── ExecutionSummary ──────────────────────────────────────────────────────────
@@ -125,6 +142,11 @@ impl ReasoningLoop {
         self
     }
 
+    /// Whether this session talks to the model through native tool calls.
+    fn tool_mode(&self) -> bool {
+        self.config.native_tool_use && self.backend.supports_tools()
+    }
+
     // ── Investigate phase ─────────────────────────────────────────────────────
 
     /// Run the investigation phase.
@@ -155,7 +177,13 @@ impl ReasoningLoop {
         }
 
         let all_caps = self.capability_registry.all_cloned();
-        let system_prompt = PromptBuilder::investigation_system(&all_caps);
+        let tools = self
+            .tool_mode()
+            .then(|| InvestigationTools::build(&all_caps, &self.capability_impls));
+        let mut system_prompt = PromptBuilder::investigation_system(&all_caps);
+        if tools.is_some() {
+            system_prompt.push_str(TOOL_MODE_NOTE);
+        }
 
         let phase_start = Instant::now();
         let mut observations: Vec<Observation> = Vec::new();
@@ -195,20 +223,40 @@ impl ReasoningLoop {
                 Message::user(user_turn),
             ];
 
-            // Ask the LLM for the next action.
-            let llm_response = self
-                .backend
-                .complete(messages, self.config.max_tokens_per_call)
-                .await?;
-
-            debug!(
-                round,
-                tokens = llm_response.output_tokens,
-                "LLM investigation response received"
-            );
-
-            // Parse the LLM's decision.
-            let action = CapabilityRequestParser::parse(&llm_response.content)?;
+            // Ask the LLM for the next action.  With native tool use the
+            // action comes only from a structured tool call; otherwise it is
+            // parsed out of the response text.
+            let action = match &tools {
+                Some(tools) => {
+                    let response = self
+                        .backend
+                        .complete_with_tools(
+                            messages,
+                            &tools.specs,
+                            ToolChoice::Any,
+                            self.config.max_tokens_per_call,
+                        )
+                        .await?;
+                    debug!(
+                        round,
+                        tokens = response.output_tokens,
+                        "LLM investigation tool call received"
+                    );
+                    tools.action(&response)?
+                }
+                None => {
+                    let llm_response = self
+                        .backend
+                        .complete(messages, self.config.max_tokens_per_call)
+                        .await?;
+                    debug!(
+                        round,
+                        tokens = llm_response.output_tokens,
+                        "LLM investigation response received"
+                    );
+                    CapabilityRequestParser::parse(&llm_response.content)?
+                }
+            };
 
             match action {
                 InvestigationAction::Done(done) => {
@@ -436,27 +484,45 @@ impl ReasoningLoop {
         }
 
         let all_caps = self.capability_registry.all_cloned();
-        let system_prompt = PromptBuilder::planning_system(&all_caps);
+        let tool_mode = self.tool_mode();
+        let mut system_prompt = PromptBuilder::planning_system(&all_caps);
+        if tool_mode {
+            system_prompt.push_str(TOOL_MODE_NOTE);
+        }
         let user_message = PromptBuilder::planning_user_with_observations(goal, observations);
 
         let messages = vec![Message::system(system_prompt), Message::user(user_message)];
 
-        let llm_response = self
-            .backend
-            .complete(messages, self.config.max_tokens_per_call)
-            .await?;
+        let plan_json = if tool_mode {
+            let response = self
+                .backend
+                .complete_with_tools(
+                    messages,
+                    &[plan_tool()],
+                    ToolChoice::Tool(PLAN_TOOL.to_string()),
+                    self.config.max_tokens_per_call,
+                )
+                .await?;
+            debug!(
+                tokens = response.output_tokens,
+                "LLM planning tool call received"
+            );
+            plan_document(&response)?
+        } else {
+            let llm_response = self
+                .backend
+                .complete(messages, self.config.max_tokens_per_call)
+                .await?;
+            debug!(
+                tokens = llm_response.output_tokens,
+                "LLM planning response received"
+            );
+            llm_response.content
+        };
 
-        debug!(
-            tokens = llm_response.output_tokens,
-            "LLM planning response received"
-        );
-
-        let plan = PlanParser::parse(
-            session_id,
-            goal,
-            &llm_response.content,
-            &self.capability_registry,
-        )?;
+        // Same parser on both paths: capability ids are validated against
+        // the registry whichever way the plan arrived.
+        let plan = PlanParser::parse(session_id, goal, &plan_json, &self.capability_registry)?;
 
         // Audit the plan proposal.
         {
@@ -974,6 +1040,7 @@ mod tests {
             max_investigation_rounds: 5,
             max_tokens_per_call: 512,
             investigation_timeout_ms: 30_000,
+            native_tool_use: true,
         }
     }
 
@@ -1446,5 +1513,209 @@ mod tests {
             flagged,
             "plan() must audit injections in caller-supplied observations"
         );
+    }
+
+    // ── Native tool use ──────────────────────────────────────────────────────
+
+    use crate::backend::{ToolCall, ToolChoice, ToolResponse, ToolSpec};
+    use serde_json::json;
+
+    /// Backend that speaks only through tool calls and records what it was
+    /// offered.  `complete` panics: in tool mode the text path must be unused.
+    struct ToolBackend {
+        turns: std::sync::Mutex<std::collections::VecDeque<(Vec<ToolCall>, String)>>,
+        seen: std::sync::Mutex<Vec<(Vec<String>, ToolChoice, String)>>,
+    }
+
+    impl ToolBackend {
+        fn new(turns: Vec<(Vec<ToolCall>, &str)>) -> Self {
+            Self {
+                turns: std::sync::Mutex::new(
+                    turns.into_iter().map(|(c, t)| (c, t.to_string())).collect(),
+                ),
+                seen: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LlmBackend for ToolBackend {
+        fn name(&self) -> &str {
+            "tool-mock"
+        }
+        fn model(&self) -> &str {
+            "tool-mock"
+        }
+        async fn complete(&self, _m: Vec<Message>, _t: u32) -> Result<LlmResponse, AgentError> {
+            panic!("text completion used although the backend supports tools");
+        }
+        fn supports_tools(&self) -> bool {
+            true
+        }
+        async fn complete_with_tools(
+            &self,
+            messages: Vec<Message>,
+            tools: &[ToolSpec],
+            choice: ToolChoice,
+            _max_tokens: u32,
+        ) -> Result<ToolResponse, AgentError> {
+            self.seen.lock().unwrap().push((
+                tools.iter().map(|t| t.name.clone()).collect(),
+                choice,
+                messages[0].content.clone(),
+            ));
+            let (calls, text) = self
+                .turns
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("no turn left");
+            Ok(ToolResponse {
+                calls,
+                text,
+                model: "tool-mock".into(),
+                input_tokens: 1,
+                output_tokens: 1,
+                finish_reason: "tool_use".into(),
+            })
+        }
+        async fn health_check(&self) -> Result<(), AgentError> {
+            Ok(())
+        }
+    }
+
+    fn tc(name: &str, input: serde_json::Value) -> ToolCall {
+        ToolCall {
+            name: name.into(),
+            input,
+        }
+    }
+
+    fn tool_loop(backend: ToolBackend, session_id: Uuid) -> ReasoningLoop {
+        ReasoningLoop::new(
+            Box::new(backend),
+            make_registry(),
+            make_allow_all_evaluator(),
+            make_audit_log(session_id),
+            make_config(),
+        )
+    }
+
+    #[tokio::test]
+    async fn investigation_runs_through_tool_calls() {
+        let session_id = Uuid::new_v4();
+        let cap_id = make_registry().all_cloned()[0].id.clone();
+        let backend = ToolBackend::new(vec![
+            (vec![tc(&cap_id, json!({}))], "looking"),
+            (
+                vec![tc("done_investigating", json!({"reasoning": "enough"}))],
+                "",
+            ),
+        ]);
+        let loop_ = tool_loop(backend, session_id);
+        let obs = loop_
+            .investigate(session_id, "goal", "localhost")
+            .await
+            .unwrap();
+        assert_eq!(obs.len(), 1);
+        assert_eq!(obs[0].capability_id, cap_id);
+    }
+
+    #[tokio::test]
+    async fn injected_json_in_model_text_is_not_executed_in_tool_mode() {
+        let session_id = Uuid::new_v4();
+        let cap_id = make_registry().all_cloned()[0].id.clone();
+        // The model was talked into *writing* a capability request instead of
+        // calling a tool.  Text mode would run it; tool mode must refuse.
+        let injected =
+            format!(r#"{{"capability_id": "{cap_id}", "args": {{}}, "reasoning": "x"}}"#);
+        let backend = ToolBackend::new(vec![(vec![], injected.as_str())]);
+        let audit = make_audit_log(session_id);
+        let loop_ = ReasoningLoop::new(
+            Box::new(backend),
+            make_registry(),
+            make_allow_all_evaluator(),
+            Arc::clone(&audit),
+            make_config(),
+        );
+        let err = loop_
+            .investigate(session_id, "goal", "localhost")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("text is not executed"), "{err}");
+        let log = audit.lock().await;
+        assert!(
+            !log.events()
+                .iter()
+                .any(|e| matches!(e.event_type, AuditEventType::CapabilityInvoked { .. })),
+            "nothing may be invoked from text"
+        );
+    }
+
+    #[tokio::test]
+    async fn planning_uses_the_plan_tool_and_the_same_parser() {
+        let session_id = Uuid::new_v4();
+        let cap_id = make_registry().all_cloned()[0].id.clone();
+        let plan_doc = json!({
+            "rationale": "because",
+            "steps": [{"capability_id": cap_id, "args": {}, "description": "look"}]
+        });
+        let backend = ToolBackend::new(vec![(vec![tc("propose_plan", plan_doc)], "")]);
+        let loop_ = tool_loop(backend, session_id);
+        let plan = loop_.plan(session_id, "goal", &[]).await.unwrap();
+        assert_eq!(plan.steps.len(), 1);
+
+        // A plan naming a capability that does not exist is rejected by the
+        // shared parser, exactly as in text mode.
+        let bad = json!({
+            "rationale": "r",
+            "steps": [{"capability_id": "does_not_exist", "args": {}, "description": "d"}]
+        });
+        let backend = ToolBackend::new(vec![(vec![tc("propose_plan", bad)], "")]);
+        let loop_ = tool_loop(backend, session_id);
+        assert!(loop_.plan(session_id, "goal", &[]).await.is_err());
+    }
+
+    #[test]
+    fn native_tools_env_switch() {
+        assert!(native_tools_enabled(None));
+        assert!(native_tools_enabled(Some("on")));
+        assert!(!native_tools_enabled(Some("off")));
+        assert!(!native_tools_enabled(Some(" FALSE ")));
+    }
+
+    #[tokio::test]
+    async fn text_protocol_is_used_when_tools_are_disabled_or_unsupported() {
+        let session_id = Uuid::new_v4();
+        // MockBackend does not support tools: the JSON-in-text path runs.
+        let backend = MockBackend::new(vec![
+            r#"{"done_investigating": true, "reasoning": "x"}"#.into()
+        ]);
+        let loop_ = ReasoningLoop::new(
+            Box::new(backend),
+            make_registry(),
+            make_allow_all_evaluator(),
+            make_audit_log(session_id),
+            make_config(),
+        );
+        assert!(!loop_.tool_mode());
+        assert!(loop_
+            .investigate(session_id, "g", "localhost")
+            .await
+            .unwrap()
+            .is_empty());
+
+        // A tool-capable backend with the switch off also stays on text.
+        let loop_ = ReasoningLoop::new(
+            Box::new(ToolBackend::new(vec![])),
+            make_registry(),
+            make_allow_all_evaluator(),
+            make_audit_log(session_id),
+            ReasoningConfig {
+                native_tool_use: false,
+                ..make_config()
+            },
+        );
+        assert!(!loop_.tool_mode());
     }
 }
