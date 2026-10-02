@@ -27,7 +27,7 @@ use sentinel_core::{
 };
 use sentinel_policy::{PolicyEffect, PolicyEvaluator, PolicyRequest};
 use serde::Serialize;
-use tracing::{info, warn};
+use tracing::{info, warn, Instrument};
 use uuid::Uuid;
 
 /// Where the executor writes audit events.
@@ -277,9 +277,25 @@ pub async fn run_plan(
         if let Some(ms) = opts.step_timeout_ms {
             ctx = ctx.with_timeout_ms(ms);
         }
+        // OpenTelemetry GenAI convention for a tool execution.  Arguments and
+        // output stay out of the span; they are in the audit log.
+        let span = tracing::info_span!(
+            "gen_ai.execute_tool",
+            otel.name = %format!("execute_tool {}", manifest.id),
+            gen_ai.operation.name = "execute_tool",
+            gen_ai.tool.name = %manifest.id,
+            sentinel.risk_tier = ?manifest.risk_tier,
+            sentinel.policy.effect = label,
+            sentinel.step.sequence = step.sequence,
+            error.type = tracing::field::Empty,
+        );
         let t0 = Instant::now();
         let result = match caps.implementation(&manifest.id) {
-            Some(cap) => invoke_with_timeout(cap, &step.args, &ctx, opts.step_timeout_ms).await,
+            Some(cap) => {
+                invoke_with_timeout(cap, &step.args, &ctx, opts.step_timeout_ms)
+                    .instrument(span.clone())
+                    .await
+            }
             None if opts.stub_unimplemented => CapabilityResult::success(
                 serde_json::json!({"stub": true, "capability_id": manifest.id}),
             ),
@@ -289,6 +305,10 @@ pub async fn run_plan(
             ),
         };
         let duration_ms = t0.elapsed().as_millis() as u64;
+
+        if !matches!(result, CapabilityResult::Success { .. }) {
+            span.record("error.type", "capability_failed");
+        }
 
         match &result {
             CapabilityResult::Success { output } => {

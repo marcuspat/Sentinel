@@ -20,6 +20,7 @@ chrono = { workspace = true }
 reqwest = { workspace = true }
 
 [dev-dependencies]
+tracing-subscriber = { workspace = true }
 tokio = { workspace = true }
 mockall = { workspace = true }
 wiremock = { workspace = true }

@@ -39,7 +39,7 @@ milestones M2–M3) and the "Known Limitations" section of `SECURITY.md`.
 - [x] **7. One plan executor.** New `sentinel-runner` crate used by `run`, the TUI and `execute`; approval covers the plan; `Failure` is a failure; halt on first failure (ADR-019). *556 → 573 tests.*
 - [x] **8. Rollback.** Done with item 7: reverse-order `invoke_inverse` in the shared executor, policy-checked, audited as `CapabilityRolledBack` only on success, `--no-rollback` opt-out on every path.
 - [x] **9. LLM resilience.** `ResilientBackend`: per-attempt deadline, bounded retries with jittered backoff, `Retry-After` honoured, per-session call and token budget, capped response bodies (ADR-020). *573 → 587 tests.*
-- [ ] **10. Observability.** OpenTelemetry GenAI semantic-convention spans (`gen_ai.*`) for every model call and capability invocation, token accounting in Prometheus metrics. No collector required; spans are no-ops unless an exporter is configured.
+- [x] **10. Observability.** Metrics derived from the audit stream (they were defined but never incremented), LLM token/request/retry metrics, `SENTINEL_METRICS_FILE`, `gen_ai.chat` / `gen_ai.execute_tool` spans with GenAI semconv attributes (ADR-021). *587 → 597 tests.*
 - [ ] **11. Fleet hardening.** Constant-time fingerprint comparison (`subtle`), and replace or clearly gate the `controller` / `agent_client` stubs. (`SECURITY.md` known limitation)
 - [ ] **12. TUI pending-plans tab.** List `PendingApproval` gate plans with approve / reject, reusing `PlanStore`. (SPEC A.7 #1)
 - [ ] **13. Supply chain.** Toolchain bump policy (CI is pinned to 1.97.0; 1.99's `double_must_use` fires in `async-trait` output — update or allow it, then bump). `cargo-deny` (advisories, licences, sources) and `cargo audit` in CI, pinned action SHAs, CycloneDX SBOM and build provenance attestation on release.
@@ -47,6 +47,7 @@ milestones M2–M3) and the "Known Limitations" section of `SECURITY.md`.
 - [ ] **14b. Resource guard coverage.** Guards read only `args.path` / `args.service`: `log_vacuum.log_dir` and `cache_prune.cache_dirs` are never checked, `sshd.service` / `ssh` bypass the `sshd` guard, and paths are not normalised (`/etc/../etc`, `//etc`). Make guards inspect every path- and service-typed argument, normalise, and match unit-name variants.
 - [ ] **14c. Policy provenance in the audit log.** Record a hash of the effective policy (file path, mode, rule ids) at session start so a chain proves which policy was in force.
 - [ ] **14d. Stuck `Executing` plans.** A process killed mid-run leaves its plan `Executing` forever; add `sentinel fail-plan ID` (operator, audited) and show the age of `Executing` plans in `sentinel plans`.
+- [ ] **14e. OTLP export.** Optional `tracing-opentelemetry` layer behind a cargo feature and `OTEL_EXPORTER_OTLP_ENDPOINT`, so the GenAI spans reach a collector.
 - [ ] **15. Release wrap-up.** README, `SECURITY.md`, CHANGELOG and ADR index brought in line with what shipped; version bump to 0.2.0; PR description rewritten as a release summary.
 
 If the backlog empties early, the remaining loops audit the code for new
@@ -68,3 +69,4 @@ fixing them.
 | 7 | Plan-store locking | *(eighth feature commit)* | 556 | Double execution confirmed (race tests fail 3/3 with the lock disabled). Killed executor leaves a plan stuck in `Executing` (14d); advisory lock does not cover NFS |
 | 8 | One plan executor + rollback | *(ninth feature commit)* | 573 | Loop executor marked `Failure` results as completed and never ran approved Medium mutating steps; both fixed. `depends_on` is unused; step-by-step approval is still whole-plan |
 | 9 | LLM resilience | *(tenth feature commit)* | 587 | Token budget can be overshot by one response; providers reporting no usage count as zero tokens. Fakes and `wiremock` only |
+| 10 | Observability | *(eleventh feature commit)* | 597 | The ADR-011 metrics had never been wired to anything. No OTLP exporter bundled (14e); counters are per process |

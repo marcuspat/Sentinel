@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use tracing::{info, warn};
+use tracing::{field, info, warn, Instrument, Span};
 
 use crate::backend::{LlmBackend, LlmResponse, Message, ToolChoice, ToolResponse, ToolSpec};
 use crate::error::AgentError;
@@ -128,6 +128,20 @@ fn retry_hint(err: &AgentError) -> Option<Option<Duration>> {
     }
 }
 
+/// Low-cardinality error class for the `error.type` span attribute.
+fn error_type(err: &AgentError) -> &'static str {
+    match err {
+        AgentError::RateLimited { .. } => "rate_limited",
+        AgentError::ApiError { status, .. } if *status >= 500 => "server_error",
+        AgentError::ApiError { .. } => "client_error",
+        AgentError::Network(_) => "network",
+        AgentError::Timeout { .. } => "timeout",
+        AgentError::InvalidResponse(_) => "invalid_response",
+        AgentError::BudgetExceeded { .. } => "budget_exceeded",
+        _ => "other",
+    }
+}
+
 /// `base * 2^(attempt-1)`, capped, then scaled into `[50%, 100%]` so
 /// simultaneous clients do not retry in lockstep.
 fn backoff(policy: &RetryPolicy, attempt: u32) -> Duration {
@@ -211,14 +225,76 @@ impl ResilientBackend {
             .fetch_add(output as u64, Ordering::SeqCst);
     }
 
+    /// A span for one model request, named and attributed per the
+    /// OpenTelemetry GenAI semantic conventions.  Usage and outcome fields
+    /// are declared empty and filled in by [`Self::finish`].
+    fn chat_span(&self, max_tokens: u32, tools: Option<usize>) -> Span {
+        let span = tracing::info_span!(
+            "gen_ai.chat",
+            otel.name = %format!("chat {}", self.inner.model()),
+            otel.kind = "client",
+            gen_ai.operation.name = "chat",
+            gen_ai.system = %self.inner.name(),
+            gen_ai.request.model = %self.inner.model(),
+            gen_ai.request.max_tokens = max_tokens,
+            sentinel.gen_ai.tools.offered = field::Empty,
+            gen_ai.response.model = field::Empty,
+            gen_ai.response.finish_reasons = field::Empty,
+            gen_ai.usage.input_tokens = field::Empty,
+            gen_ai.usage.output_tokens = field::Empty,
+            sentinel.gen_ai.retries = field::Empty,
+            error.type = field::Empty,
+        );
+        if let Some(n) = tools {
+            span.record("sentinel.gen_ai.tools.offered", n as u64);
+        }
+        span
+    }
+
+    /// Record the outcome of one request on its span and in the metrics.
+    fn finish(
+        &self,
+        span: &Span,
+        started: std::time::Instant,
+        retries: u64,
+        outcome: Result<(&str, &str, u32, u32), &AgentError>,
+    ) {
+        span.record("sentinel.gen_ai.retries", retries);
+        let (ok, input, output) = match outcome {
+            Ok((model, finish_reason, input, output)) => {
+                span.record("gen_ai.response.model", model);
+                span.record("gen_ai.response.finish_reasons", finish_reason);
+                span.record("gen_ai.usage.input_tokens", input as u64);
+                span.record("gen_ai.usage.output_tokens", output as u64);
+                (true, input as u64, output as u64)
+            }
+            Err(err) => {
+                span.record("error.type", error_type(err));
+                (false, 0, 0)
+            }
+        };
+        let metrics = sentinel_audit::metrics::global();
+        metrics.metrics().observe_llm(&sentinel_audit::LlmCall {
+            backend: self.inner.name(),
+            model: self.inner.model(),
+            ok,
+            input_tokens: input,
+            output_tokens: output,
+            retries,
+            duration: started.elapsed(),
+        });
+        metrics.flush();
+    }
+
     /// Run `attempt` under the deadline, retrying per the policy.
-    async fn with_retries<T, F, Fut>(&self, mut attempt: F) -> Result<T, AgentError>
+    async fn with_retries<T, F, Fut>(&self, mut attempt: F) -> (Result<T, AgentError>, u64)
     where
         F: FnMut() -> Fut,
         Fut: std::future::Future<Output = Result<T, AgentError>>,
     {
         let max = self.policy.max_attempts.max(1);
         let mut n = 0u32;
+        let mut retried = 0u64;
         loop {
             n += 1;
             let timeout_ms = self.policy.request_timeout.as_millis() as u64;
@@ -231,17 +307,17 @@ impl ResilientBackend {
                     if n > 1 {
                         info!(attempts = n, "model call succeeded after retry");
                     }
-                    return Ok(v);
+                    return (Ok(v), retried);
                 }
                 Err(e) => e,
             };
 
             let Some(server_delay) = retry_hint(&err) else {
-                return Err(err);
+                return (Err(err), retried);
             };
             if n >= max {
                 warn!(attempts = n, error = %err, "model call failed; retries exhausted");
-                return Err(err);
+                return (Err(err), retried);
             }
             let delay = match server_delay {
                 Some(d) if d > self.policy.max_retry_after => {
@@ -249,13 +325,14 @@ impl ResilientBackend {
                         retry_after_secs = d.as_secs(),
                         "server asked for a longer wait than allowed; not retrying"
                     );
-                    return Err(err);
+                    return (Err(err), retried);
                 }
                 // The server knows its own limits: wait at least what it asked.
                 Some(d) => d.max(backoff(&self.policy, n)),
                 None => backoff(&self.policy, n),
             };
             self.retries.fetch_add(1, Ordering::SeqCst);
+            retried += 1;
             warn!(attempt = n, delay_ms = delay.as_millis() as u64, error = %err, "retrying model call");
             tokio::time::sleep(delay).await;
         }
@@ -278,11 +355,25 @@ impl LlmBackend for ResilientBackend {
         max_tokens: u32,
     ) -> Result<LlmResponse, AgentError> {
         self.check_budget()?;
-        let response = self
+        let span = self.chat_span(max_tokens, None);
+        let started = std::time::Instant::now();
+        let (result, retries) = self
             .with_retries(|| self.inner.complete(messages.clone(), max_tokens))
-            .await?;
-        self.account(response.input_tokens, response.output_tokens);
-        Ok(response)
+            .instrument(span.clone())
+            .await;
+        match &result {
+            Ok(r) => {
+                self.account(r.input_tokens, r.output_tokens);
+                self.finish(
+                    &span,
+                    started,
+                    retries,
+                    Ok((&r.model, &r.finish_reason, r.input_tokens, r.output_tokens)),
+                );
+            }
+            Err(e) => self.finish(&span, started, retries, Err(e)),
+        }
+        result
     }
 
     fn supports_tools(&self) -> bool {
@@ -297,14 +388,28 @@ impl LlmBackend for ResilientBackend {
         max_tokens: u32,
     ) -> Result<ToolResponse, AgentError> {
         self.check_budget()?;
-        let response = self
+        let span = self.chat_span(max_tokens, Some(tools.len()));
+        let started = std::time::Instant::now();
+        let (result, retries) = self
             .with_retries(|| {
                 self.inner
                     .complete_with_tools(messages.clone(), tools, choice.clone(), max_tokens)
             })
-            .await?;
-        self.account(response.input_tokens, response.output_tokens);
-        Ok(response)
+            .instrument(span.clone())
+            .await;
+        match &result {
+            Ok(r) => {
+                self.account(r.input_tokens, r.output_tokens);
+                self.finish(
+                    &span,
+                    started,
+                    retries,
+                    Ok((&r.model, &r.finish_reason, r.input_tokens, r.output_tokens)),
+                );
+            }
+            Err(e) => self.finish(&span, started, retries, Err(e)),
+        }
+        result
     }
 
     async fn health_check(&self) -> Result<(), AgentError> {
@@ -678,6 +783,163 @@ mod tests {
             Budget::from_values(Some("0"), None).max_calls,
             0,
             "0 = unlimited"
+        );
+    }
+
+    // ── Spans (OpenTelemetry GenAI semantic conventions) ─────────────────────
+
+    use std::collections::HashMap;
+    use tracing::field::{Field, Visit};
+    use tracing_subscriber::layer::{Context, SubscriberExt};
+    use tracing_subscriber::Layer;
+
+    /// Collects every span's name and recorded fields.
+    type SpanRecord = (String, HashMap<String, String>);
+
+    #[derive(Clone, Default)]
+    struct Capture(std::sync::Arc<Mutex<Vec<SpanRecord>>>);
+
+    struct FieldMap<'a>(&'a mut HashMap<String, String>);
+    impl Visit for FieldMap<'_> {
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            self.0.insert(
+                field.name().to_string(),
+                format!("{value:?}").trim_matches('"').to_string(),
+            );
+        }
+        fn record_str(&mut self, field: &Field, value: &str) {
+            self.0.insert(field.name().to_string(), value.to_string());
+        }
+        fn record_u64(&mut self, field: &Field, value: u64) {
+            self.0.insert(field.name().to_string(), value.to_string());
+        }
+    }
+
+    impl<S> Layer<S> for Capture
+    where
+        S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+    {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            id: &tracing::span::Id,
+            _ctx: Context<'_, S>,
+        ) {
+            let mut fields = HashMap::new();
+            attrs.record(&mut FieldMap(&mut fields));
+            fields.insert("__id".into(), id.into_u64().to_string());
+            self.0
+                .lock()
+                .unwrap()
+                .push((attrs.metadata().name().to_string(), fields));
+        }
+        fn on_record(
+            &self,
+            id: &tracing::span::Id,
+            values: &tracing::span::Record<'_>,
+            _ctx: Context<'_, S>,
+        ) {
+            let key = id.into_u64().to_string();
+            let mut spans = self.0.lock().unwrap();
+            if let Some((_, fields)) = spans.iter_mut().find(|(_, f)| f["__id"] == key) {
+                values.record(&mut FieldMap(fields));
+            }
+        }
+    }
+
+    fn captured<F, Fut>(run: F) -> Vec<SpanRecord>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        let capture = Capture::default();
+        let subscriber = tracing_subscriber::registry().with(capture.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(run());
+        let spans = capture.0.lock().unwrap().clone();
+        spans
+    }
+
+    #[test]
+    fn successful_call_emits_a_gen_ai_chat_span_with_usage() {
+        let spans = captured(|| async {
+            let (backend, _) = wrap(
+                Scripted::new(vec![Err(api(503)), Ok((120, 30))]),
+                fast(),
+                Budget::default(),
+            );
+            backend.complete(msgs(), 256).await.unwrap();
+        });
+        let (name, f) = spans
+            .iter()
+            .find(|(n, _)| n == "gen_ai.chat")
+            .expect("gen_ai.chat span");
+        assert_eq!(name, "gen_ai.chat");
+        assert_eq!(f["gen_ai.operation.name"], "chat");
+        assert_eq!(f["gen_ai.system"], "scripted");
+        assert_eq!(f["gen_ai.request.model"], "m");
+        assert_eq!(f["gen_ai.request.max_tokens"], "256");
+        assert_eq!(f["gen_ai.usage.input_tokens"], "120");
+        assert_eq!(f["gen_ai.usage.output_tokens"], "30");
+        assert_eq!(f["gen_ai.response.finish_reasons"], "end_turn");
+        assert_eq!(f["sentinel.gen_ai.retries"], "1");
+        assert_eq!(f["otel.name"], "chat m");
+        assert!(!f.contains_key("error.type"));
+    }
+
+    #[test]
+    fn failed_call_records_error_type_and_no_usage() {
+        let spans = captured(|| async {
+            let (backend, _) = wrap(
+                Scripted::new(vec![Err(api(401))]),
+                fast(),
+                Budget::default(),
+            );
+            assert!(backend
+                .complete_with_tools(msgs(), &[], ToolChoice::Any, 64)
+                .await
+                .is_err());
+        });
+        let (_, f) = spans.iter().find(|(n, _)| n == "gen_ai.chat").unwrap();
+        assert_eq!(f["error.type"], "client_error");
+        assert_eq!(f["sentinel.gen_ai.tools.offered"], "0");
+        assert!(!f.contains_key("gen_ai.usage.input_tokens"));
+    }
+
+    /// Prompts and completions must not be attached to spans: they contain
+    /// host details and attacker-influenced capability output.
+    #[test]
+    fn spans_carry_no_prompt_or_completion_text() {
+        let spans = captured(|| async {
+            let (backend, _) = wrap(Scripted::new(vec![]), fast(), Budget::default());
+            backend
+                .complete(vec![Message::user("the secret hostname is db-prod-7")], 16)
+                .await
+                .unwrap();
+        });
+        for (_, fields) in &spans {
+            for (k, v) in fields {
+                assert!(!v.contains("db-prod-7"), "{k} leaked prompt text");
+                assert!(!k.contains("prompt") && !k.contains("completion"), "{k}");
+            }
+        }
+    }
+
+    #[test]
+    fn error_types_are_low_cardinality() {
+        assert_eq!(error_type(&api(500)), "server_error");
+        assert_eq!(error_type(&api(529)), "server_error");
+        assert_eq!(error_type(&api(404)), "client_error");
+        assert_eq!(error_type(&AgentError::Timeout { ms: 1 }), "timeout");
+        assert_eq!(
+            error_type(&AgentError::RateLimited {
+                retry_after_secs: 1
+            }),
+            "rate_limited"
         );
     }
 }

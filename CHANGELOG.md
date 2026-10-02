@@ -105,6 +105,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   now capped per observation
 
 ### Added
+- **Working metrics (ADR-021).** `SentinelMetrics` was defined and tested but
+  never incremented or exported. Counters are now derived from the audit log
+  on every append, so every command is measured and the numbers cannot
+  disagree with the chain. New LLM metrics: requests by outcome, tokens by
+  direction, retries, request duration; plus suspected prompt injections and
+  MCP tool calls. Set `SENTINEL_METRICS_FILE` to have the Prometheus text
+  exposition kept up to date (for node_exporter's textfile collector)
+- **GenAI spans (ADR-021).** `gen_ai.chat` per model request and
+  `gen_ai.execute_tool` per capability invocation, with OpenTelemetry GenAI
+  semantic-convention attributes (model, token usage, finish reason, error
+  type). Prompts, completions and tool arguments are never attached. No OTLP
+  exporter is bundled
 - **LLM retries, deadlines and session budgets (ADR-020).** Model calls made by
   `sentinel run` and the TUI are retried up to four times on rate limits,
   `5xx`/`529` and network errors, with jittered exponential backoff and

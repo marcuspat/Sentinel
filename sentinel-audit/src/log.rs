@@ -134,6 +134,16 @@ impl AuditLog {
         self.next_sequence += 1;
         self.events.push(event);
 
+        // Metrics come from the audit stream itself (ADR-021), for
+        // file-backed logs only: in-memory logs are tests and scratch chains.
+        if self.file_path.is_some() {
+            let metrics = crate::metrics::global();
+            if let Some(ev) = self.events.last() {
+                metrics.metrics().observe(&ev.event_type);
+            }
+            metrics.flush();
+        }
+
         // Sign the new head.  The event is already durable; if the
         // checkpoint cannot be written the caller still gets an error, so a
         // signing-enabled deployment never silently produces unsigned events.
