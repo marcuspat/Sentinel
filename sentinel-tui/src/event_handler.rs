@@ -28,7 +28,16 @@ pub async fn handle_events(app: &mut App, event: AppEvent) -> Result<(), anyhow:
     app.poll_approval();
 
     match event {
-        AppEvent::Key(key) => handle_key(app, key),
+        AppEvent::Key(key) => {
+            // The Gate tab owns its keys (list navigation, approve, reject,
+            // and all input while a confirmation is open).  Anything it does
+            // not consume falls through to the global handler.
+            let on_gate = app.current_tab == Tab::Gate && !app.is_approving();
+            let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+            if !(on_gate && !ctrl && app.gate.handle_key(key).await) {
+                handle_key(app, key);
+            }
+        }
         AppEvent::Tick => {
             // Periodic tick — nothing to do beyond the approval poll above.
         }
@@ -69,6 +78,17 @@ fn handle_key(app: &mut App, key: KeyEvent) {
                 return;
             }
             _ => {}
+        }
+    }
+
+    // On the Goal tab every printable character is text.  Without this,
+    // `q` quit the program and `a`, `s`, `r`, `j`, `k` were swallowed or
+    // scrolled, so a goal such as "restart nginx" could not be typed.
+    if app.current_tab == Tab::Goal {
+        if let KeyCode::Char(c) = key.code {
+            app.goal_input.insert(app.input_cursor, c);
+            app.input_cursor += c.len_utf8();
+            return;
         }
     }
 
@@ -123,24 +143,33 @@ fn handle_key(app: &mut App, key: KeyEvent) {
             let dry_run = app.dry_run;
             app.start_session(host, dry_run);
         }
-        KeyCode::Char(c) if app.current_tab == Tab::Goal => {
-            // Insert character at cursor position.
-            app.goal_input.insert(app.input_cursor, c);
-            app.input_cursor += 1;
-        }
+        // The cursor is a byte offset; move it by whole characters so a
+        // multi-byte character is never split.
         KeyCode::Backspace if app.current_tab == Tab::Goal && app.input_cursor > 0 => {
-            app.input_cursor -= 1;
-            app.goal_input.remove(app.input_cursor);
+            let prev = prev_boundary(&app.goal_input, app.input_cursor);
+            app.goal_input.replace_range(prev..app.input_cursor, "");
+            app.input_cursor = prev;
         }
         KeyCode::Left if app.input_cursor > 0 => {
-            app.input_cursor -= 1;
+            app.input_cursor = prev_boundary(&app.goal_input, app.input_cursor);
         }
         KeyCode::Right if app.input_cursor < app.goal_input.len() => {
-            app.input_cursor += 1;
+            app.input_cursor = app.goal_input[app.input_cursor..]
+                .chars()
+                .next()
+                .map_or(app.goal_input.len(), |c| app.input_cursor + c.len_utf8());
         }
 
         _ => {}
     }
+}
+
+/// Byte offset of the character boundary before `at`.
+fn prev_boundary(text: &str, at: usize) -> usize {
+    text[..at.min(text.len())]
+        .char_indices()
+        .next_back()
+        .map_or(0, |(i, _)| i)
 }
 
 #[cfg(test)]
@@ -369,5 +398,106 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(app.current_tab, Tab::Audit);
+    }
+
+    // ── Goal input accepts every letter ──────────────────────────────────────
+
+    #[test]
+    fn goal_text_can_contain_letters_that_are_shortcuts_elsewhere() {
+        let mut app = App::new();
+        for c in "restart nginx quickly, ask jack".chars() {
+            handle_key(&mut app, key(KeyCode::Char(c)));
+        }
+        assert_eq!(app.goal_input, "restart nginx quickly, ask jack");
+        assert!(!app.should_quit, "typing q in a goal must not quit");
+        assert_eq!(app.current_tab, Tab::Goal);
+    }
+
+    /// Typing or deleting a multi-byte character used to panic: the cursor
+    /// moved by one byte and landed inside the character.
+    #[test]
+    fn goal_input_handles_multi_byte_characters() {
+        let mut app = App::new();
+        for c in "revisar señal é".chars() {
+            handle_key(&mut app, key(KeyCode::Char(c)));
+        }
+        assert_eq!(app.goal_input, "revisar señal é");
+        handle_key(&mut app, key(KeyCode::Backspace));
+        assert_eq!(app.goal_input, "revisar señal ");
+        handle_key(&mut app, key(KeyCode::Left));
+        handle_key(&mut app, key(KeyCode::Left));
+        handle_key(&mut app, key(KeyCode::Left));
+        handle_key(&mut app, key(KeyCode::Left));
+        handle_key(&mut app, key(KeyCode::Backspace)); // removes ñ's neighbour 'e'
+        assert_eq!(app.goal_input, "revisar sñal ");
+        handle_key(&mut app, key(KeyCode::Right));
+        handle_key(&mut app, key(KeyCode::Char('!')));
+        assert_eq!(app.goal_input, "revisar sñ!al ");
+    }
+
+    #[test]
+    fn shortcuts_still_work_off_the_goal_tab() {
+        let mut app = App::new();
+        app.current_tab = Tab::Audit;
+        handle_key(&mut app, key(KeyCode::Char('a')));
+        assert_eq!(app.goal_input, "", "letters off the Goal tab are not text");
+        handle_key(&mut app, key(KeyCode::Char('q')));
+        assert!(app.should_quit);
+    }
+
+    // ── Gate tab routing ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn gate_tab_consumes_its_keys_and_passes_the_rest_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new();
+        app.gate = crate::gate_view::GateView::new(dir.path().to_path_buf());
+        app.current_tab = Tab::Gate;
+
+        // `r` refreshes the gate list; it must not reach the Plan-tab reject.
+        handle_events(&mut app, AppEvent::Key(key(KeyCode::Char('r'))))
+            .await
+            .unwrap();
+        assert!(app.gate.message.as_deref().unwrap().contains("0 plan(s)"));
+
+        // Tab still switches tabs; q still quits.
+        handle_events(&mut app, AppEvent::Key(key(KeyCode::Tab)))
+            .await
+            .unwrap();
+        assert_eq!(app.current_tab, Tab::Goal);
+        app.current_tab = Tab::Gate;
+        handle_events(&mut app, AppEvent::Key(key(KeyCode::Char('q'))))
+            .await
+            .unwrap();
+        assert!(app.should_quit);
+    }
+
+    #[tokio::test]
+    async fn entering_the_gate_tab_loads_plans_from_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut plan = sentinel_core::Plan::new(uuid::Uuid::new_v4(), "g".into(), "r".into());
+        plan.add_step(sentinel_core::PlanStep::new(
+            1,
+            "disk_usage",
+            serde_json::json!({"path": "/"}),
+            "d",
+            sentinel_core::RiskTier::Low,
+        ));
+        sentinel_mcp::PlanStore::open(dir.path())
+            .unwrap()
+            .save(&sentinel_mcp::StoredPlan::new_pending(
+                plan,
+                "localhost",
+                uuid::Uuid::new_v4(),
+                None,
+            ))
+            .unwrap();
+
+        let mut app = App::new();
+        app.gate = crate::gate_view::GateView::new(dir.path().to_path_buf());
+        app.current_tab = Tab::Audit;
+        handle_key(&mut app, key(KeyCode::Tab));
+        assert_eq!(app.current_tab, Tab::Gate);
+        assert_eq!(app.gate.plans.len(), 1);
     }
 }

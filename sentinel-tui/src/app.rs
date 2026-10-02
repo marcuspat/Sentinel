@@ -295,6 +295,8 @@ pub enum Tab {
     Plan,
     Execution,
     Audit,
+    /// Plans proposed through the MCP gate, awaiting an operator.
+    Gate,
 }
 
 impl Tab {
@@ -304,6 +306,7 @@ impl Tab {
         Tab::Plan,
         Tab::Execution,
         Tab::Audit,
+        Tab::Gate,
     ];
 
     pub fn title(self) -> &'static str {
@@ -313,6 +316,7 @@ impl Tab {
             Tab::Plan => "Plan",
             Tab::Execution => "Execution",
             Tab::Audit => "Audit",
+            Tab::Gate => "Gate",
         }
     }
 
@@ -354,6 +358,8 @@ pub struct App {
     pub input_cursor: usize,
     /// Current interaction state — drives modal/blocking input handling.
     pub state: AppState,
+    /// Plans proposed through the MCP gate (the Gate tab).
+    pub gate: crate::gate_view::GateView,
 
     // ── New fields for live agent integration ─────────────────────────────────
     /// Goal that was just submitted; `run_app()` drains this each tick to
@@ -391,6 +397,7 @@ impl App {
             status_message: None,
             input_cursor: 0,
             state: AppState::Normal,
+            gate: crate::gate_view::GateView::default(),
             // Live agent integration
             pending_goal: None,
             host: "localhost".to_string(),
@@ -504,10 +511,19 @@ impl App {
 
     pub fn next_tab(&mut self) {
         self.current_tab = self.current_tab.next();
+        self.on_tab_entered();
     }
 
     pub fn prev_tab(&mut self) {
         self.current_tab = self.current_tab.prev();
+        self.on_tab_entered();
+    }
+
+    /// The Gate tab shows what is on disk right now, so reload on entry.
+    fn on_tab_entered(&mut self) {
+        if self.current_tab == Tab::Gate {
+            self.gate.refresh();
+        }
     }
 
     // ── Log scrolling ─────────────────────────────────────────────────────────
@@ -698,7 +714,7 @@ mod tests {
     #[test]
     fn tab_next_wraps_around() {
         let mut app = App::new();
-        app.current_tab = Tab::Audit;
+        app.current_tab = *Tab::ALL.last().unwrap();
         app.next_tab();
         assert_eq!(app.current_tab, Tab::Goal);
     }
@@ -706,9 +722,12 @@ mod tests {
     #[test]
     fn tab_prev_wraps_around() {
         let mut app = App::new();
+        app.gate =
+            crate::gate_view::GateView::new(std::env::temp_dir().join("sentinel-no-such-state"));
         app.current_tab = Tab::Goal;
         app.prev_tab();
-        assert_eq!(app.current_tab, Tab::Audit);
+        assert_eq!(app.current_tab, *Tab::ALL.last().unwrap());
+        assert_eq!(app.current_tab, Tab::Gate);
     }
 
     #[test]

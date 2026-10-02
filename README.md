@@ -164,7 +164,7 @@ sentinel-audit         — SHA-256 hash-chained audit log, JSONL, Prometheus met
 sentinel-capabilities  — 14 concrete capabilities (fs, process, packages, net, metrics)
 sentinel-agent-llm     — Investigate/Plan/Act reasoning loop, LLM backends
 sentinel-fleet         — mTLS fleet management, staged rollouts
-sentinel-tui           — ratatui TUI: 5 tabs, approval workflow, clap CLI
+sentinel-tui           — ratatui TUI: 6 tabs (incl. Gate for MCP plans), approval workflow, clap CLI
 sentinel-mcp           — MCP stdio policy gate: tools, plan store, approved-plan executor
 ```
 

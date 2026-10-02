@@ -86,6 +86,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `SuspectedPromptInjection` event
 
 ### Fixed
+- **Goals could not contain common letters in the TUI.** On the Goal tab `q`
+  quit the program, `a`, `s` and `r` were swallowed and `j`/`k` scrolled, so a
+  goal such as "restart nginx" could not be typed. Printable characters on the
+  Goal tab are now always text
+- **Typing or deleting a non-ASCII character in the TUI goal field panicked**:
+  the cursor moved one byte at a time and landed inside the character
 - **`sentinel fleet` could not work.** It invoked `sentinel agent-exec` on each
   host, a subcommand that did not exist. It exists now
 - Fleet `AgentClient::register` / `heartbeat` returned success without doing
@@ -123,6 +129,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   now capped per observation
 
 ### Added
+- **TUI Gate tab.** Lists plans proposed through `sentinel serve --mcp`
+  (pending first), shows the selected plan's steps, risk, content hash and
+  integrity check, and lets the operator approve (`a`, then type the first 8
+  characters of the plan id, as `sentinel approve` requires) or reject (`x`,
+  then `y`). It uses the same code path as the CLI commands, so audit events
+  and refusals (not pending, content changed after proposal) are identical;
+  approvals are recorded as `operator_tui`
 - **Working metrics (ADR-021).** `SentinelMetrics` was defined and tested but
   never incremented or exported. Counters are now derived from the audit log
   on every append, so every command is measured and the numbers cannot

@@ -113,3 +113,21 @@ Still open: a process killed while a plan is `Executing` leaves it in that
 state permanently. Nothing re-runs it (the safe direction), but an operator has
 no command to mark it failed. `flock` is advisory and local; a state directory
 on NFS without lock support is not protected.
+
+## Amendment (2026-10-01): approval in the TUI
+
+"TUI approval of stored plans is specified but not yet built" no longer holds.
+The TUI has a Gate tab that lists stored plans and can approve or reject them.
+
+- Approve and reject run through `sentinel_mcp::operator::{approve_plan,
+  reject_plan}`, which `sentinel approve` / `reject` now call too. One
+  implementation: same checks (must be `PendingApproval`, content hash must
+  still match), same audit-before-transition order, same locked transition.
+- Approval asks for the first eight characters of the plan id, as the CLI does.
+  Rejection asks for `y`.
+- The audit event records the surface: `operator_cli:…` or `operator_tui:…`.
+- The MCP server still has no path to these functions through any tool.
+
+The threat model is unchanged: this is a speed bump for a human, not a
+boundary against a same-UID process. Opening the tab only reads; it never
+creates the state directory.
