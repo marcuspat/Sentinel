@@ -9,6 +9,16 @@ use serde_json::Value;
 
 const BIN: &str = env!("CARGO_BIN_EXE_sentinel");
 
+/// Every test here writes an executable (the fake `ssh`) and then spawns
+/// processes.  If another thread forks while the script is still open for
+/// writing, the child inherits that descriptor and the exec of the script
+/// fails with ETXTBSY.  One lock around each test removes the race.
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn base(dir: &Path) -> Command {
     let mut cmd = Command::new(BIN);
     cmd.current_dir(dir)
@@ -44,6 +54,7 @@ fn audit_text(dir: &Path) -> String {
 
 #[test]
 fn agent_exec_runs_a_read_only_capability_and_audits_it() {
+    let _serial = serial();
     let dir = tempfile::tempdir().unwrap();
     let (out, json) = agent_exec(dir.path(), &["disk_usage", r#"{"path": "/tmp"}"#]);
     assert!(
@@ -67,6 +78,7 @@ fn agent_exec_runs_a_read_only_capability_and_audits_it() {
 
 #[test]
 fn agent_exec_needs_approval_for_mutating_capabilities() {
+    let _serial = serial();
     let dir = tempfile::tempdir().unwrap();
     let logs = dir.path().join("logs");
     std::fs::create_dir(&logs).unwrap();
@@ -87,6 +99,7 @@ fn agent_exec_needs_approval_for_mutating_capabilities() {
 
 #[test]
 fn agent_exec_refuses_what_host_policy_denies_even_when_approved() {
+    let _serial = serial();
     let dir = tempfile::tempdir().unwrap();
     // sshd is protected by a built-in resource guard on the host.
     let (out, json) = agent_exec(
@@ -103,6 +116,7 @@ fn agent_exec_refuses_what_host_policy_denies_even_when_approved() {
 
 #[test]
 fn agent_exec_rejects_unknown_capabilities_and_bad_arguments() {
+    let _serial = serial();
     let dir = tempfile::tempdir().unwrap();
     for (args, expected) in [
         (vec!["nope", "{}"], "unknown capability"),
@@ -149,6 +163,7 @@ fn fleet(dir: &Path, args: &[&str]) -> Output {
 #[cfg(unix)]
 #[test]
 fn fleet_round_trip_applies_policy_on_both_ends_and_audits_the_run() {
+    let _serial = serial();
     let dir = tempfile::tempdir().unwrap();
     let out = fleet(
         dir.path(),
@@ -210,6 +225,7 @@ fn fleet_round_trip_applies_policy_on_both_ends_and_audits_the_run() {
 #[cfg(unix)]
 #[test]
 fn fleet_dispatches_nothing_without_approval_for_mutating_capabilities() {
+    let _serial = serial();
     let dir = tempfile::tempdir().unwrap();
     let logs = dir.path().join("logs");
     std::fs::create_dir(&logs).unwrap();
@@ -257,6 +273,7 @@ fn fleet_dispatches_nothing_without_approval_for_mutating_capabilities() {
 #[cfg(unix)]
 #[test]
 fn fleet_refuses_hostile_hosts_and_capabilities_before_spawning_ssh() {
+    let _serial = serial();
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("pwned");
     let evil_host = format!("-oProxyCommand=touch {}", marker.display());
@@ -293,6 +310,7 @@ fn fleet_refuses_hostile_hosts_and_capabilities_before_spawning_ssh() {
 #[cfg(unix)]
 #[test]
 fn fleet_skips_hosts_that_controller_policy_denies() {
+    let _serial = serial();
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let policy = dir.path().join("policy.toml");

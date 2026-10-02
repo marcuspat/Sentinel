@@ -44,7 +44,22 @@ jobs:
         run: cargo check --workspace --all-targets
 
       - name: cargo test
-        run: cargo test --workspace
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --workspace 2>&1 | tee test.log
+
+      # Name the failing tests in check annotations, so a red run can be
+      # diagnosed from the checks API.
+      - name: Annotate test failures
+        if: failure()
+        shell: bash
+        run: |
+          if [ -f test.log ]; then
+            sed -E 's/\x1B\[[0-9;]*[A-Za-z]//g' test.log \
+              | grep -E '^test .* \.\.\. FAILED$|panicked at ' | head -9 \
+              | while IFS= read -r line; do echo "::error::${line}"; done || true
+          fi
 
       - name: cargo clippy
         shell: bash
