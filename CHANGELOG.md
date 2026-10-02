@@ -7,6 +7,34 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Security
+- **Resource guards could be bypassed four ways.** Guards read only
+  `args.path` and `args.service`, so `log_vacuum.log_dir` and
+  `cache_prune.cache_dirs` were never checked; `sshd.service` and Debian's
+  `ssh` slipped past the `sshd` guard; and `/var/../etc` or `//etc` slipped
+  past the `/etc` guard. Guards now inspect every string in the arguments
+  (any name, any nesting), normalise paths lexically, and compare unit names
+  without their type suffix or instance. The default service guard also covers
+  `ssh`, `systemd-*` and `containerd`, and the default path guard now covers
+  the directories `SECURITY.md` already claimed it did (`/dev`, `/bin`,
+  `/sbin`, `/lib`, `/lib64`, `/usr/bin`, `/usr/sbin`, `/usr/lib`,
+  `/run/systemd`) — the code had only `/etc`, `/boot`, `/sys`, `/proc`.
+  Symlinks are not resolved by the guard;
+  Landlock remains the control for those.
+- **An MCP client could make the audit log fail verification.** A float in a
+  tool call's arguments could parse back from disk one bit different from the
+  value that was hashed, so an untouched log reported tampering. Found by the
+  new protocol fuzzer; fixed by enabling exact float round-tripping in
+  `serde_json`.
+
+### Added
+- **Property tests and protocol fuzzing** (`proptest`, 32 properties): the
+  policy evaluator (deny-by-default, kill switch, tightening never weakens,
+  guards hold under any path/unit spelling), the untrusted-data fence (no
+  content can forge or close it), the audit chain (any edit, drop, swap or
+  splice is detected) and the MCP JSON-RPC surface (no panic, well-formed
+  replies, nothing mutating runs without approval, audit chain stays valid).
+
+### Security
 - **Four dependency advisories fixed, found by the new `cargo deny` check.**
   `rustls` 0.23.40 → 0.23.45 (RUSTSEC-2026-0285, TLS 1.3 handshake messages
   accepted across key changes), `h2` → 0.4.19 (RUSTSEC-2026-0258, unbounded

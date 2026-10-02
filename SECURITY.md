@@ -33,8 +33,12 @@ relies on multiple layers of defense:
 - **Deny-by-default**: All requests are denied unless explicitly allowed by a matching rule.
 - **Kill switch**: When activated, blocks **all** capabilities regardless of risk tier or kind.
   This is an emergency stop — it does not pass ReadOnly requests through.
-- **Resource guards**: System directories (/etc, /boot, /sys, /proc, /dev, /bin, /usr/bin, /lib,
-  /run/systemd) and critical services (sshd, systemd, docker) are protected by default.
+- **Resource guards**: System directories (/etc, /boot, /sys, /proc, /dev, /bin, /sbin, /lib,
+  /lib64, /usr/bin, /usr/sbin, /usr/lib, /run/systemd) and critical services (sshd/ssh,
+  systemd and systemd-*, docker, containerd) are protected from mutating capabilities by
+  default. Guards check every string argument at any depth, after lexical path normalisation
+  (`..`, `//`, `.`) and with unit suffixes removed (`sshd.service` → `sshd`). They do not
+  resolve symlinks; the Landlock profile is the control for those.
 - **Risk tiers**: Low, Medium, High, Critical — with distinct routing (allow / require-approval / deny).
 - **Time restrictions**: Evaluated against server wall-clock (`Utc::now()`), not client-supplied timestamps.
 

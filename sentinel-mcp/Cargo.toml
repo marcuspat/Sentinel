@@ -25,6 +25,7 @@ hex = { workspace = true }
 libc = { workspace = true }
 
 [dev-dependencies]
+proptest = { workspace = true }
 sentinel-capabilities = { workspace = true }
 sentinel-exec = { workspace = true }
 tempfile = { workspace = true }
