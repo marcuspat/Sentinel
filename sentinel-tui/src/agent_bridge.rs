@@ -114,7 +114,10 @@ async fn run_inner(
         registry,
         policy,
         Arc::clone(&audit),
-        ReasoningConfig::default(),
+        ReasoningConfig {
+            rollback_on_failure: crate::runtime_opts::rollback_enabled(),
+            ..ReasoningConfig::default()
+        },
     )
     .with_capabilities(caps);
 

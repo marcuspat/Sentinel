@@ -2,6 +2,7 @@ pub mod agent_bridge;
 pub mod app;
 pub mod event_handler;
 pub mod policy_source;
+pub mod runtime_opts;
 pub mod ui;
 pub mod widgets;
 

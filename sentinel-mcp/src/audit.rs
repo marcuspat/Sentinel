@@ -74,3 +74,13 @@ impl AuditSink {
         self.len().await == 0
     }
 }
+
+#[async_trait::async_trait]
+impl sentinel_runner::AuditWriter for AuditSink {
+    async fn record(&self, event: AuditEventType) -> Result<(), String> {
+        AuditSink::record(self, event)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}

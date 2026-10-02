@@ -21,7 +21,7 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use sentinel_audit::{AuditEventType, AuditLog};
-use sentinel_core::{ApprovalDecision, Capability, ExecutionContext, Plan, StepStatus};
+use sentinel_core::{ApprovalDecision, Capability, ExecutionContext, Plan};
 use sentinel_policy::{PolicyEffect, PolicyEvaluator, PolicyRequest};
 
 use crate::backend::{LlmBackend, Message, ToolChoice};
@@ -32,6 +32,7 @@ use crate::planner::{
 use crate::prompt_builder::PromptBuilder;
 use crate::tools::{plan_document, plan_tool, InvestigationTools, PLAN_TOOL, TOOL_MODE_NOTE};
 use crate::untrusted::detect_injection_markers;
+use sentinel_runner::{run_plan, CapabilityLookup, RunError, RunOptions, StepState};
 
 // ── ReasoningConfig ───────────────────────────────────────────────────────────
 
@@ -52,6 +53,10 @@ pub struct ReasoningConfig {
     /// (ADR-017).  When `false`, or with a backend that lacks tool support,
     /// the loop parses a JSON object out of the model's text.
     pub native_tool_use: bool,
+
+    /// After a failed or denied step, undo completed steps that support it
+    /// (newest first).
+    pub rollback_on_failure: bool,
 }
 
 impl Default for ReasoningConfig {
@@ -61,6 +66,7 @@ impl Default for ReasoningConfig {
             max_tokens_per_call: 4096,
             investigation_timeout_ms: 60_000,
             native_tool_use: native_tools_enabled(std::env::var(NATIVE_TOOLS_ENV).ok().as_deref()),
+            rollback_on_failure: true,
         }
     }
 }
@@ -88,6 +94,27 @@ pub struct ExecutionSummary {
     pub steps_rolled_back: u32,
     /// Total wall-clock duration of the act phase in milliseconds.
     pub total_duration_ms: u64,
+}
+
+/// Capability lookup for the shared executor: manifests come from the
+/// registry, implementations from whatever was passed to
+/// [`ReasoningLoop::with_capabilities`].
+struct LoopCapabilities<'a> {
+    registry: &'a CapabilityRegistry,
+    impls: &'a HashMap<String, Box<dyn Capability>>,
+}
+
+impl CapabilityLookup for LoopCapabilities<'_> {
+    fn implementation(&self, id: &str) -> Option<&dyn Capability> {
+        self.impls.get(id).map(|b| b.as_ref())
+    }
+
+    fn manifest(&self, id: &str) -> Option<sentinel_core::CapabilityManifest> {
+        self.impls
+            .get(id)
+            .map(|c| c.manifest().clone())
+            .or_else(|| self.registry.get(id).cloned())
+    }
 }
 
 // ── ReasoningLoop ─────────────────────────────────────────────────────────────
@@ -619,252 +646,60 @@ impl ReasoningLoop {
             ));
         }
 
-        let act_start = Instant::now();
-        let mut steps_completed = 0u32;
-        let mut steps_failed = 0u32;
-        let mut steps_rolled_back = 0u32;
-        let mut completed_step_indices: Vec<usize> = Vec::new();
-        let mut any_failure = false;
-
-        for i in 0..plan.steps.len() {
-            let step = &plan.steps[i];
-
-            // Check if any dependency failed.
-            let dep_failed = !step.depends_on.is_empty() && any_failure;
-            if dep_failed {
-                warn!(
-                    step_index = i,
-                    capability_id = %step.capability_id,
-                    "skipping step due to failed dependency"
-                );
-                plan.steps[i].status = StepStatus::Skipped;
-                continue;
+        // One executor for every path (ADR-019): `sentinel run`, the TUI and
+        // `sentinel execute` all go through `sentinel_runner::run_plan`.
+        let lookup = LoopCapabilities {
+            registry: &self.capability_registry,
+            impls: &self.capability_impls,
+        };
+        let opts = RunOptions {
+            step_timeout_ms: None,
+            rollback: self.config.rollback_on_failure,
+            // Stub results only when the loop was built with no
+            // implementations at all (test harnesses).  A real session that
+            // is missing one capability fails that step instead.
+            stub_unimplemented: self.capability_impls.is_empty(),
+        };
+        let report = run_plan(
+            plan,
+            host,
+            session_id,
+            &lookup,
+            &self.policy_evaluator,
+            self.audit_log.as_ref(),
+            &opts,
+        )
+        .await
+        .map_err(|e| match e {
+            RunError::NotApproved => {
+                AgentError::PolicyDenied("plan is not approved for execution".to_string())
             }
-
-            let capability_id = step.capability_id.clone();
-            let args = step.args.clone();
-            let risk_tier = step.risk_tier;
-
-            // Policy check.
-            let manifest = self
-                .capability_registry
-                .get(&capability_id)
-                .ok_or_else(|| AgentError::CapabilityNotFound(capability_id.clone()))?;
-
-            let policy_request = PolicyRequest {
-                session_id,
-                capability_id: capability_id.clone(),
-                capability_kind: manifest.kind,
-                risk_tier,
-                args: args.clone(),
-                target_host: host.to_string(),
-                timestamp: chrono::Utc::now(),
-                session_phase: Some("Executing".to_string()),
-            };
-
-            let decision = self.policy_evaluator.evaluate(policy_request);
-
-            {
-                let mut log = self.audit_log.lock().await;
-                let effect_str = match &decision.effect {
-                    PolicyEffect::Allowed => "allow",
-                    PolicyEffect::Denied { .. } => "deny",
-                    PolicyEffect::RequiresApproval => "require_approval",
-                    PolicyEffect::AuditOnly => "audit_only",
-                };
-                log.append(AuditEventType::PolicyEvaluated {
-                    capability_id: capability_id.clone(),
-                    effect: effect_str.to_string(),
-                    rule_id: decision.matched_rule.clone(),
-                })
-                .await
-                .map_err(|e| {
-                    AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string()))
-                })?;
+            RunError::Audit(msg) => {
+                AgentError::Core(sentinel_core::CoreError::ExecutionFailed(msg))
             }
+        })?;
 
-            if !decision.is_allowed() {
-                let reason = match &decision.effect {
-                    PolicyEffect::Denied { reason } => reason.clone(),
-                    PolicyEffect::RequiresApproval => {
-                        "step requires additional approval".to_string()
-                    }
-                    _ => "policy denied".to_string(),
-                };
-
-                {
-                    let mut log = self.audit_log.lock().await;
-                    log.append(AuditEventType::PolicyDenied {
-                        capability_id: capability_id.clone(),
-                        reason: reason.clone(),
-                    })
-                    .await
-                    .map_err(|e| {
-                        AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string()))
-                    })?;
-                }
-
-                plan.steps[i].status = StepStatus::Skipped;
-                any_failure = true;
-                steps_failed += 1;
-                continue;
-            }
-
-            // Invoke the capability.
-            plan.steps[i].status = StepStatus::Executing;
-
-            {
-                let mut log = self.audit_log.lock().await;
-                log.append(AuditEventType::CapabilityInvoked {
-                    capability_id: capability_id.clone(),
-                    args: args.clone(),
-                    risk_tier: format!("{:?}", risk_tier),
-                })
-                .await
-                .map_err(|e| {
-                    AgentError::Core(sentinel_core::CoreError::ExecutionFailed(e.to_string()))
-                })?;
-            }
-
-            let ctx = ExecutionContext::new(session_id, host);
-            let invoke_start = Instant::now();
-            let result = self
-                .invoke_capability(session_id, &capability_id, &args, &ctx)
-                .await;
-            let duration_ms = invoke_start.elapsed().as_millis() as u64;
-
-            match result {
-                Ok(cap_result) => {
-                    // Execution results surface to the operator and can feed
-                    // later planning rounds: same tripwire as investigate().
-                    let rendered = PromptBuilder::capability_result_payload(&cap_result);
-                    self.tripwire(&capability_id, &rendered).await;
-
-                    plan.steps[i].status = StepStatus::Completed;
-                    steps_completed += 1;
-                    completed_step_indices.push(i);
-
-                    {
-                        let mut log = self.audit_log.lock().await;
-                        log.append(AuditEventType::CapabilitySucceeded {
-                            capability_id: capability_id.clone(),
-                            duration_ms,
-                        })
-                        .await
-                        .map_err(|e| {
-                            AgentError::Core(sentinel_core::CoreError::ExecutionFailed(
-                                e.to_string(),
-                            ))
-                        })?;
-                    }
-
-                    info!(
-                        step_index = i,
-                        capability_id = %capability_id,
-                        duration_ms,
-                        "step completed"
-                    );
-                }
-                Err(e) => {
-                    let err_msg = e.to_string();
-
-                    // Failed capability output is just as attacker-influenced.
-                    self.tripwire(&capability_id, &err_msg).await;
-
-                    plan.steps[i].status = StepStatus::Failed;
-                    any_failure = true;
-                    steps_failed += 1;
-
-                    {
-                        let mut log = self.audit_log.lock().await;
-                        log.append(AuditEventType::CapabilityFailed {
-                            capability_id: capability_id.clone(),
-                            error: err_msg.clone(),
-                        })
-                        .await
-                        .map_err(|e| {
-                            AgentError::Core(sentinel_core::CoreError::ExecutionFailed(
-                                e.to_string(),
-                            ))
-                        })?;
-                    }
-
-                    error!(
-                        step_index = i,
-                        capability_id = %capability_id,
-                        error = %err_msg,
-                        "step failed"
-                    );
-                }
+        // Execution results surface to the operator and can feed later
+        // planning rounds: same tripwire as investigate().
+        for step in &report.steps {
+            if let Some(result) = &step.result {
+                let rendered = PromptBuilder::capability_result_payload(result);
+                self.tripwire(&step.capability_id, &rendered).await;
             }
         }
-
-        // Roll back completed steps in reverse order if there were failures.
-        if any_failure {
-            for &step_idx in completed_step_indices.iter().rev() {
-                let (can_rollback, capability_id) = {
-                    let step = &plan.steps[step_idx];
-                    (step.can_rollback, step.capability_id.clone())
-                };
-                if can_rollback {
-                    info!(
-                        step_index = step_idx,
-                        capability_id = %capability_id,
-                        "attempting rollback"
-                    );
-
-                    // Invoke the capability's inverse to actually undo the effect.
-                    if let Some(cap) = self.capability_impls.get(&capability_id) {
-                        let rb_ctx = ExecutionContext::new(session_id, host);
-                        match cap
-                            .invoke_inverse(plan.steps[step_idx].args.clone(), &rb_ctx)
-                            .await
-                        {
-                            Some(sentinel_core::CapabilityResult::Success { .. }) => {
-                                info!(capability_id = %capability_id, "rollback succeeded")
-                            }
-                            Some(sentinel_core::CapabilityResult::Failure { error, .. }) => {
-                                warn!(capability_id = %capability_id, error = %error, "rollback failed")
-                            }
-                            None => {
-                                info!(capability_id = %capability_id, "capability has no inverse")
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    plan.steps[step_idx].status = StepStatus::RolledBack;
-                    steps_completed -= 1;
-                    steps_rolled_back += 1;
-
-                    {
-                        let mut log = self.audit_log.lock().await;
-                        log.append(AuditEventType::CapabilityRolledBack { capability_id })
-                            .await
-                            .map_err(|e| {
-                                AgentError::Core(sentinel_core::CoreError::ExecutionFailed(
-                                    e.to_string(),
-                                ))
-                            })?;
-                    }
-                }
-            }
-        }
-
-        let total_duration_ms = act_start.elapsed().as_millis() as u64;
 
         let summary = ExecutionSummary {
-            steps_completed,
-            steps_failed,
-            steps_rolled_back,
-            total_duration_ms,
+            steps_completed: report.count(StepState::Completed),
+            steps_failed: report.count(StepState::Failed) + report.count(StepState::Denied),
+            steps_rolled_back: report.count(StepState::RolledBack),
+            total_duration_ms: report.duration_ms,
         };
 
         {
             let mut log = self.audit_log.lock().await;
             log.append(AuditEventType::SessionCompleted {
-                duration_ms: total_duration_ms,
-                capabilities_executed: steps_completed as u64,
+                duration_ms: summary.total_duration_ms,
+                capabilities_executed: summary.steps_completed as u64,
             })
             .await
             .map_err(|e| {
@@ -874,10 +709,10 @@ impl ReasoningLoop {
 
         info!(
             session_id = %session_id,
-            steps_completed,
-            steps_failed,
-            steps_rolled_back,
-            total_duration_ms,
+            steps_completed = summary.steps_completed,
+            steps_failed = summary.steps_failed,
+            steps_rolled_back = summary.steps_rolled_back,
+            total_duration_ms = summary.total_duration_ms,
             "act phase complete"
         );
 
@@ -1041,6 +876,7 @@ mod tests {
             max_tokens_per_call: 512,
             investigation_timeout_ms: 30_000,
             native_tool_use: true,
+            rollback_on_failure: true,
         }
     }
 

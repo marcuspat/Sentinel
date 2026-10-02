@@ -8,6 +8,7 @@ license.workspace = true
 sentinel-core = { workspace = true }
 sentinel-policy = { workspace = true }
 sentinel-audit = { workspace = true }
+sentinel-runner = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

@@ -56,6 +56,10 @@ struct Cli {
     #[arg(long, env = "SENTINEL_POLICY", global = true)]
     policy: Option<std::path::PathBuf>,
 
+    /// Do not undo completed steps when a later step of a plan fails
+    #[arg(long, env = "SENTINEL_NO_ROLLBACK", global = true)]
+    no_rollback: bool,
+
     /// LLM backend to use
     #[arg(long, default_value = "anthropic", global = true)]
     backend: String,
@@ -184,6 +188,7 @@ enum Commands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     policy_source::set_path(cli.policy.clone());
+    sentinel_tui::runtime_opts::set_no_rollback(cli.no_rollback);
 
     // Logs always go to stderr: stdout is reserved for command output and,
     // under `serve --mcp`, for the JSON-RPC stream.
@@ -425,7 +430,10 @@ async fn run_agent(
         registry,
         policy,
         Arc::clone(&audit),
-        ReasoningConfig::default(),
+        ReasoningConfig {
+            rollback_on_failure: sentinel_tui::runtime_opts::rollback_enabled(),
+            ..ReasoningConfig::default()
+        },
     )
     .with_capabilities(caps);
 

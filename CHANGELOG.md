@@ -74,6 +74,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `SuspectedPromptInjection` event
 
 ### Fixed
+- **`sentinel run` never performed approved mutating steps (ADR-019).** With
+  the default policy every Medium-risk mutating capability evaluates to
+  `RequiresApproval`; the loop's executor treated that as a refusal even after
+  the operator had approved the plan, so those steps were skipped and counted
+  as failures
+- **A failed step was reported as completed.** The loop's executor marked a
+  step `Completed` whenever the capability returned at all, including a
+  `Failure` result, and carried on with the remaining steps
+- **Steps were marked `RolledBack` when nothing was rolled back**: when the
+  inverse failed, or the capability had no inverse
 - **An approved plan could be executed twice.** `sentinel execute` read the
   plan, checked it was `Approved`, then wrote `Executing`: two processes
   started together both passed the check and both ran every step. Status
@@ -146,6 +156,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   minimum supported Rust version instead of failing deep inside a dependency
 
 ### Changed
+- **One plan executor (ADR-019).** New `sentinel-runner` crate; `sentinel run`,
+  the TUI and `sentinel execute` all execute plans through it. Approval covers
+  the plan (`Denied` still never runs), policy uses the capability's current
+  manifest, execution halts at the first denied or failed step, and audit
+  events are written before each action
+- `sentinel execute` now rolls back completed, rollback-capable steps after a
+  failure, newest first; the inverse is policy-checked, so the kill switch
+  stops rollback too. `--no-rollback` / `SENTINEL_NO_ROLLBACK` disables it on
+  every path
 - Tracing output from every `sentinel` subcommand now goes to stderr (was
   stdout), so stdout carries only command output or, under `serve --mcp`, the
   JSON-RPC stream

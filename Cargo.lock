@@ -2477,6 +2477,7 @@ dependencies = [
  "sentinel-core",
  "sentinel-exec",
  "sentinel-policy",
+ "sentinel-runner",
  "serde",
  "serde_json",
  "tempfile",
@@ -2595,6 +2596,7 @@ dependencies = [
  "sentinel-core",
  "sentinel-exec",
  "sentinel-policy",
+ "sentinel-runner",
  "serde",
  "serde_json",
  "sha2",
@@ -2618,6 +2620,23 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "toml",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "sentinel-runner"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "sentinel-audit",
+ "sentinel-core",
+ "sentinel-policy",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
  "tracing",
  "uuid",
 ]

@@ -1,17 +1,16 @@
 [package]
-name = "sentinel-mcp"
+name = "sentinel-runner"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "MCP (Model Context Protocol) policy gate for Sentinel: lets coding agents query policy, run read-only investigations, and propose plans that only an operator can approve"
+description = "The one plan executor for Sentinel: policy check, audit, timeout, halt-on-failure and rollback, shared by `sentinel run` and `sentinel execute`"
 
 [dependencies]
 sentinel-core = { workspace = true }
 sentinel-policy = { workspace = true }
 sentinel-audit = { workspace = true }
-sentinel-runner = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -20,11 +19,6 @@ tracing = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
-sha2 = { workspace = true }
-hex = { workspace = true }
-libc = { workspace = true }
 
 [dev-dependencies]
-sentinel-capabilities = { workspace = true }
-sentinel-exec = { workspace = true }
-tempfile = { workspace = true }
+tokio = { workspace = true }

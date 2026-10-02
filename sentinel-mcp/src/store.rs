@@ -84,6 +84,9 @@ pub struct ExecutionRecord {
     pub steps_completed: u32,
     pub steps_failed: u32,
     pub steps_skipped: u32,
+    /// Completed steps that were undone after a later step failed.
+    #[serde(default)]
+    pub steps_rolled_back: u32,
     pub audit_file: Option<String>,
     pub error: Option<String>,
 }
@@ -332,6 +335,7 @@ impl PlanStore {
                 steps_completed: 0,
                 steps_failed: 0,
                 steps_skipped: 0,
+                steps_rolled_back: 0,
                 audit_file,
                 error: None,
             });

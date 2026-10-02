@@ -17,7 +17,7 @@ use sentinel_audit::AuditEventType;
 use sentinel_capabilities::all_capabilities;
 use sentinel_exec::HardenedExecutor;
 use sentinel_mcp::{
-    default_state_dir, execute_approved_plan, index_capabilities, plan_status_json, AuditSink,
+    default_state_dir, execute_approved_plan_with, index_capabilities, plan_status_json, AuditSink,
     Gate, GateConfig, PlanStatus, PlanStore, StoredPlan,
 };
 use sentinel_tui::policy_source;
@@ -187,8 +187,12 @@ pub async fn execute(
     )));
     let policy = policy_source::load()?;
     let audit = AuditSink::create(&state_dir, "execute")?;
-    let report =
-        execute_approved_plan(&store, plan_id, &caps, &policy, &audit, step_timeout_ms).await?;
+    let opts = sentinel_mcp::RunOptions {
+        step_timeout_ms: Some(step_timeout_ms),
+        rollback: sentinel_tui::runtime_opts::rollback_enabled(),
+        stub_unimplemented: false,
+    };
+    let report = execute_approved_plan_with(&store, plan_id, &caps, &policy, &audit, &opts).await?;
     for s in &report.steps {
         println!(
             "  {}. {:<20} {:<10} {}",
