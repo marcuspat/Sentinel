@@ -21,7 +21,8 @@ for critical/high findings and 90 days for medium/low.
 
 | Version | Supported |
 |---|---|
-| 0.1.x | Yes |
+| 0.2.x | Yes |
+| 0.1.x | No — several of the issues fixed in 0.2.0 are exploitable; upgrade |
 
 ## Security Architecture
 
@@ -39,6 +40,11 @@ relies on multiple layers of defense:
   default. Guards check every string argument at any depth, after lexical path normalisation
   (`..`, `//`, `.`) and with unit suffixes removed (`sshd.service` → `sshd`). They do not
   resolve symlinks; the Landlock profile is the control for those.
+- **Policy files (ADR-018)**: `--policy FILE` / `$SENTINEL_POLICY`. In the default
+  `tighten` mode a file can only make a decision stricter (`allow` is rejected at load
+  time); `mode = "replace"` is the only way to loosen policy. The kill switch and the
+  built-in guards stay in force in both modes. Parsing is strict, a bad file stops the
+  command, and a file writable by group or other is refused.
 - **Risk tiers**: Low, Medium, High, Critical — with distinct routing (allow / require-approval / deny).
 - **Time restrictions**: Evaluated against server wall-clock (`Utc::now()`), not client-supplied timestamps.
 
@@ -87,11 +93,34 @@ Every production path runs commands through `HardenedExecutor` (ADR-016):
 - **Atomic writes**: Each JSONL line is written in a single `write_all` call to reduce
   the crash-window for partial writes.
 
+### Plan Execution (sentinel-runner)
+
+- **One executor (ADR-019)**: `sentinel run`, the TUI and `sentinel execute` share it.
+  Policy is re-evaluated for every step, a `Failure` result halts the plan, and completed
+  steps are rolled back in reverse order through the same policy check (`--no-rollback`
+  opts out). A rollback is audited only when it succeeded.
+
+### MCP Gate and Plan Store (sentinel-mcp)
+
+- **No approve or execute tool (ADR-013)**: an MCP client can list, dry-run policy, run
+  read-only capabilities and propose plans. Approval needs an interactive terminal.
+- **Content hash**: a plan modified after approval is refused.
+- **Locked store**: per-plan `flock`, an atomic `Approved → Executing` claim and `fsync`ed
+  writes, so an approved plan cannot be executed twice.
+
 ### Fleet (sentinel-fleet)
 
-- **Mutual TLS**: All controller-to-agent communication uses mTLS via rustls 0.23.
-- **Certificate pinning**: Client verifies the server's SHA-256 fingerprint directly;
-  does not rely on a CA bundle.
+`sentinel fleet` runs one capability on many hosts over SSH (ADR-022):
+
+- **Policy twice**: evaluated per host on the controller, then again on each host under
+  that host's own policy by `sentinel agent-exec`. Nothing is dispatched when approval is
+  required and `--approve` is absent. The run is audited.
+- **Input validation**: host specs, users, key paths and capability ids are validated;
+  `ssh` is called with `--` before the destination and every part of the remote command
+  is quoted.
+- **mTLS is not in this path.** The mutual-TLS and certificate-pinning code described in
+  ADR-008 exists in the crate (pins are compared in constant time) and is exercised only
+  by its tests.
 
 ### LLM Integration (sentinel-agent-llm)
 
@@ -99,6 +128,16 @@ Every production path runs commands through `HardenedExecutor` (ADR-016):
   passes through `PolicyEvaluator::evaluate` before running.
 - **Approval gate**: Plan execution requires `plan.approval` to be set to an approved state
   via an explicit call before `execute_plan` will proceed.
+- **Untrusted output (ADR-014)**: capability output is wrapped in a fence carrying a fresh
+  random nonce and the fence marker is neutralised inside the data, so output cannot close
+  or forge the fence. This lowers the odds of prompt injection; the policy and approval
+  gates are what bound its effect.
+- **Native tool use (ADR-017)**: with Anthropic and api.openai.com the model requests
+  capabilities through the provider's tool-call channel, validated against each
+  capability's argument schema; free text is not parsed for requests on that path.
+  `SENTINEL_NATIVE_TOOLS=off` restores the text protocol.
+- **Deadlines and budgets (ADR-020)**: 120 s per attempt, at most 4 attempts, and a
+  per-session budget (default 100 calls, 2,000,000 tokens). Response bodies are capped.
 - **Capability ID validation**: LLM-supplied capability IDs are validated against `[a-zA-Z0-9._-]`
   and cross-checked against the capability registry before any invocation.
 
@@ -121,7 +160,19 @@ Every production path runs commands through `HardenedExecutor` (ADR-016):
   local daemons remains.
 - The fixed child `PATH` assumes a conventional filesystem layout (not NixOS/Guix).
 - `sentinel fleet` trusts SSH authentication to carry the operator's approval to each host,
-  and uses `StrictHostKeyChecking=accept-new` (trust on first use). The mTLS controller
-  protocol is not implemented.
+  and uses `StrictHostKeyChecking=accept-new` (trust on first use). Every approved host is
+  contacted in parallel — staged rollout is not wired in — and the mTLS controller protocol
+  is not implemented (roadmap 14f).
+- Resource guards compare paths lexically and do not resolve symlinks.
+- The audit log does not record which policy file was in force (roadmap 14c).
+- A process killed mid-run leaves its plan in `Executing`; there is no operator command to
+  fail it yet (roadmap 14d). The plan-store lock is advisory and does not cover NFS.
+- The LLM token budget can be overshot by one response, and a provider that reports no
+  usage counts as zero tokens.
+- Provider wire formats are tested against mock servers only, never the live APIs.
+- Spans are emitted through `tracing`; no OTLP exporter is bundled (roadmap 14e).
+- Fuzzing is property-based (`proptest`); there are no coverage-guided `cargo-fuzz` targets.
+- The release workflow's SBOM and attestation steps have not yet run end to end (they
+  run only on a tag).
 - `GENESIS_HASH` is defined as 64 zero characters (an arbitrary sentinel value), not
   `SHA-256("")`. External audit tools must use the same convention.

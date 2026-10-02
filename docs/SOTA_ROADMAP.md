@@ -50,7 +50,7 @@ milestones M2–M3) and the "Known Limitations" section of `SECURITY.md`.
 - [ ] **14d. Stuck `Executing` plans.** A process killed mid-run leaves its plan `Executing` forever; add `sentinel fail-plan ID` (operator, audited) and show the age of `Executing` plans in `sentinel plans`.
 - [ ] **14e. OTLP export.** Optional `tracing-opentelemetry` layer behind a cargo feature and `OTEL_EXPORTER_OTLP_ENDPOINT`, so the GenAI spans reach a collector.
 - [ ] **14f. Fleet follow-ups.** Wire `StagedRollout` into `sentinel fleet` (canary first), carry a signed approval instead of a flag, and decide whether the unimplemented mTLS controller code should stay in the tree.
-- [ ] **15. Release wrap-up.** README, `SECURITY.md`, CHANGELOG and ADR index brought in line with what shipped; version bump to 0.2.0; PR description rewritten as a release summary.
+- [x] **15. Release wrap-up.** README, `SECURITY.md`, CHANGELOG and ADRs brought in line with what shipped; ADR index added (`docs/adr/README.md`); version 0.2.0; PR #11 description rewritten as a release summary. Not tagged, not merged. *(667 tests)*
 
 If the backlog empties early, the remaining loops audit the code for new
 defects (start with `unwrap`/`expect` on non-test paths and anything that
@@ -77,3 +77,4 @@ fixing them.
 | 12 | TUI Gate tab | *(this commit)* | 625 | Rendering is tested as text lines, not in a real terminal. Found the goal field could not take several letters, and panicked on multi-byte characters |
 | 13 | Supply chain | *(this commit)* | 636 | First `cargo deny` run found four advisories and an unmaintained crate — all fixed. Release workflow changes (SBOM, attestation) are syntax-checked and the SBOM command was run locally, but the workflow itself only runs on a tag, so it is untested end to end. Toolchain still 1.97.0 (13b) |
 | 14 | Property tests + guard coverage (14, 14b) | *(this commit)* | 667 | 13b skipped: Rust 1.99 cannot be installed here. Two items in one loop because the guard properties could not pass without the 14b fix. The fuzzer found a real bug (float arguments broke audit verification). No coverage-guided fuzzing (`cargo-fuzz` needs nightly); proptest runs 96–512 cases per property in CI, 3 000 were run once locally |
+| 15 | Release wrap-up | *(this commit)* | 667 | Docs only, plus the version bump. Corrected claims the code did not back: README and `SECURITY.md` said fleet traffic used mTLS (it is SSH), README offered an Ollama backend the CLI cannot select, ADR-013 was still "Proposed". Still open: 13b, 14c, 14d, 14e, 14f |

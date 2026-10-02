@@ -1,11 +1,15 @@
 # ADR-011: Prometheus-Compatible Metrics Exposition
 
-**Status:** Accepted  
+**Status:** Accepted — amended by [ADR-021](ADR-021-observability.md)  
 **Date:** 2026-05-26  
 **Deciders:** Core team  
 **Categories:** Observability, Operations, Monitoring
 
 ---
+
+> **Implementation note (0.2.0).** There is no HTTP metrics endpoint.
+> Metrics are derived from the audit stream and written as a Prometheus text
+> file when `SENTINEL_METRICS_FILE` is set (ADR-021).
 
 ## Context
 

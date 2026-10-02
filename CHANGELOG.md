@@ -6,6 +6,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - Unreleased
+
+Branch `feat/sota-round-2` (draft PR #11). Not tagged; the date is set when the
+maintainer merges and tags. 454 → 667 tests.
+
 ### Security
 - **Resource guards could be bypassed four ways.** Guards read only
   `args.path` and `args.service`, so `log_vacuum.log_dir` and
@@ -25,16 +30,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   value that was hashed, so an untouched log reported tampering. Found by the
   new protocol fuzzer; fixed by enabling exact float round-tripping in
   `serde_json`.
-
-### Added
-- **Property tests and protocol fuzzing** (`proptest`, 32 properties): the
-  policy evaluator (deny-by-default, kill switch, tightening never weakens,
-  guards hold under any path/unit spelling), the untrusted-data fence (no
-  content can forge or close it), the audit chain (any edit, drop, swap or
-  splice is detected) and the MCP JSON-RPC surface (no panic, well-formed
-  replies, nothing mutating runs without approval, audit chain stays valid).
-
-### Security
 - **Four dependency advisories fixed, found by the new `cargo deny` check.**
   `rustls` 0.23.40 → 0.23.45 (RUSTSEC-2026-0285, TLS 1.3 handshake messages
   accepted across key changes), `h2` → 0.4.19 (RUSTSEC-2026-0258, unbounded
@@ -127,50 +122,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   written to the hash-chained audit log as a new
   `SuspectedPromptInjection` event
 
-### Fixed
-- **Goals could not contain common letters in the TUI.** On the Goal tab `q`
-  quit the program, `a`, `s` and `r` were swallowed and `j`/`k` scrolled, so a
-  goal such as "restart nginx" could not be typed. Printable characters on the
-  Goal tab are now always text
-- **Typing or deleting a non-ASCII character in the TUI goal field panicked**:
-  the cursor moved one byte at a time and landed inside the character
-- **`sentinel fleet` could not work.** It invoked `sentinel agent-exec` on each
-  host, a subcommand that did not exist. It exists now
-- Fleet `AgentClient::register` / `heartbeat` returned success without doing
-  anything; they now return `NotImplemented`
-- The TLS fingerprint pin is compared as raw bytes in constant time, ignoring
-  case and colons; a malformed pin rejects every certificate
-- **`sentinel run` never performed approved mutating steps (ADR-019).** With
-  the default policy every Medium-risk mutating capability evaluates to
-  `RequiresApproval`; the loop's executor treated that as a refusal even after
-  the operator had approved the plan, so those steps were skipped and counted
-  as failures
-- **A failed step was reported as completed.** The loop's executor marked a
-  step `Completed` whenever the capability returned at all, including a
-  `Failure` result, and carried on with the remaining steps
-- **Steps were marked `RolledBack` when nothing was rolled back**: when the
-  inverse failed, or the capability had no inverse
-- **An approved plan could be executed twice.** `sentinel execute` read the
-  plan, checked it was `Approved`, then wrote `Executing`: two processes
-  started together both passed the check and both ran every step. Status
-  transitions now run under an exclusive `flock` on a per-plan lock file, and
-  `Approved -> Executing` is a single atomic claim that exactly one caller
-  wins. The same race between `approve` and `reject` could leave one
-  operator's status next to the other's decision record; also closed. Plan
-  writes are now `fsync`ed (file and directory), so a crash cannot leave an
-  empty plan document
-- A plan step that hit the MCP gate's per-step timeout left its child process
-  running. Children are now killed when the step's future is dropped
-- CI failed on untouched code when Rust 1.99 shipped a clippy lint
-  (`double_must_use`) that fires inside `async-trait`'s expansion. CI and the
-  release verify job now pin the toolchain (1.97.0) instead of tracking
-  `stable`, and clippy failures are surfaced as check annotations
-- Investigation prompts panicked when truncating capability output whose
-  2 000th byte fell inside a multi-byte UTF-8 character. Truncation is now
-  char-boundary safe, and planning prompts, which previously had no limit, are
-  now capped per observation
-
 ### Added
+- **Property tests and protocol fuzzing** (`proptest`, 32 properties): the
+  policy evaluator (deny-by-default, kill switch, tightening never weakens,
+  guards hold under any path/unit spelling), the untrusted-data fence (no
+  content can forge or close it), the audit chain (any edit, drop, swap or
+  splice is detected) and the MCP JSON-RPC surface (no panic, well-formed
+  replies, nothing mutating runs without approval, audit chain stays valid).
 - **TUI Gate tab.** Lists plans proposed through `sentinel serve --mcp`
   (pending first), shows the selected plan's steps, risk, content hash and
   integrity check, and lets the operator approve (`a`, then type the first 8
@@ -249,6 +207,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   minimum supported Rust version instead of failing deep inside a dependency
 
 ### Changed
+- **Version 0.2.0.** Workspace version bumped; not yet tagged.
+- **Documentation corrected to match the code.** README and `SECURITY.md`
+  claimed fleet traffic used mutual TLS — `sentinel fleet` runs over SSH and
+  the mTLS code is unused (ADR-008 now says so). README offered an Ollama
+  backend the CLI cannot select. ADR-011 described an HTTP metrics endpoint
+  that does not exist. ADR-013 was still "Proposed". Added an ADR index
+  (`docs/adr/README.md`), the environment variables and policy-file format to
+  the README, and the open limitations to `SECURITY.md`.
 - **One plan executor (ADR-019).** New `sentinel-runner` crate; `sentinel run`,
   the TUI and `sentinel execute` all execute plans through it. Approval covers
   the plan (`Denied` still never runs), policy uses the capability's current
@@ -273,6 +239,47 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and CONTRIBUTING.md
 
 ### Fixed
+- **Goals could not contain common letters in the TUI.** On the Goal tab `q`
+  quit the program, `a`, `s` and `r` were swallowed and `j`/`k` scrolled, so a
+  goal such as "restart nginx" could not be typed. Printable characters on the
+  Goal tab are now always text
+- **Typing or deleting a non-ASCII character in the TUI goal field panicked**:
+  the cursor moved one byte at a time and landed inside the character
+- **`sentinel fleet` could not work.** It invoked `sentinel agent-exec` on each
+  host, a subcommand that did not exist. It exists now
+- Fleet `AgentClient::register` / `heartbeat` returned success without doing
+  anything; they now return `NotImplemented`
+- The TLS fingerprint pin is compared as raw bytes in constant time, ignoring
+  case and colons; a malformed pin rejects every certificate
+- **`sentinel run` never performed approved mutating steps (ADR-019).** With
+  the default policy every Medium-risk mutating capability evaluates to
+  `RequiresApproval`; the loop's executor treated that as a refusal even after
+  the operator had approved the plan, so those steps were skipped and counted
+  as failures
+- **A failed step was reported as completed.** The loop's executor marked a
+  step `Completed` whenever the capability returned at all, including a
+  `Failure` result, and carried on with the remaining steps
+- **Steps were marked `RolledBack` when nothing was rolled back**: when the
+  inverse failed, or the capability had no inverse
+- **An approved plan could be executed twice.** `sentinel execute` read the
+  plan, checked it was `Approved`, then wrote `Executing`: two processes
+  started together both passed the check and both ran every step. Status
+  transitions now run under an exclusive `flock` on a per-plan lock file, and
+  `Approved -> Executing` is a single atomic claim that exactly one caller
+  wins. The same race between `approve` and `reject` could leave one
+  operator's status next to the other's decision record; also closed. Plan
+  writes are now `fsync`ed (file and directory), so a crash cannot leave an
+  empty plan document
+- A plan step that hit the MCP gate's per-step timeout left its child process
+  running. Children are now killed when the step's future is dropped
+- CI failed on untouched code when Rust 1.99 shipped a clippy lint
+  (`double_must_use`) that fires inside `async-trait`'s expansion. CI and the
+  release verify job now pin the toolchain (1.97.0) instead of tracking
+  `stable`, and clippy failures are surfaced as check annotations
+- Investigation prompts panicked when truncating capability output whose
+  2 000th byte fell inside a multi-byte UTF-8 character. Truncation is now
+  char-boundary safe, and planning prompts, which previously had no limit, are
+  now capped per observation
 - `docker build` could not succeed: the builder image was `rust:1.82-slim`, but
   `ratatui 0.30` requires Rust 1.86 and `clap 4.6` requires 1.85, so cargo refused
   the workspace before compiling anything. Builder bumped to `rust:1.86-slim`
@@ -344,4 +351,5 @@ Pre-release security review identified and resolved 10 findings:
 - tokio 1.35, serde 1.0, rustls 0.23, ratatui 0.30, reqwest 0.12, prometheus 0.14
 - `cargo audit`: 0 vulnerabilities at release
 
+[Unreleased]: https://github.com/marcuspat/Sentinel/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/marcuspat/Sentinel/releases/tag/v0.1.0

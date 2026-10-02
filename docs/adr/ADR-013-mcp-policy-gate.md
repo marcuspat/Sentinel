@@ -1,6 +1,6 @@
 # ADR-013: MCP Policy Gate for Coding Agents
 
-**Status:** Proposed  
+**Status:** Accepted — implemented; plan-store locking added in 0.2.0  
 **Date:** 2026-09-25  
 **Deciders:** Marcus Patman  
 **Categories:** Architecture, Safety, Human-in-the-Loop, Integration
