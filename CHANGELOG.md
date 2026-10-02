@@ -7,6 +7,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Security
+- **Four dependency advisories fixed, found by the new `cargo deny` check.**
+  `rustls` 0.23.40 → 0.23.45 (RUSTSEC-2026-0285, TLS 1.3 handshake messages
+  accepted across key changes), `h2` → 0.4.19 (RUSTSEC-2026-0258, unbounded
+  empty DATA frames), `crossbeam-epoch` → 0.9.21 (RUSTSEC-2026-0204) and
+  `anyhow` → 1.0.104 (RUSTSEC-2026-0190, unsound `downcast_mut`).
+- **`rustls-pemfile` removed** (RUSTSEC-2025-0134, unmaintained). Fleet PEM
+  parsing now uses the PEM support in `rustls-pki-types`.
+- **Supply-chain controls (`docs/SUPPLY_CHAIN.md`).** `cargo deny check`
+  (advisories, licences, sources, wildcard versions) runs on every push; every
+  GitHub Action is pinned to a commit SHA; both workflows default to a
+  read-only token; release binaries are built with the same pinned toolchain CI
+  tests with, ship a CycloneDX SBOM each, and carry a build provenance
+  attestation (`gh attestation verify`). `sentinel-tui/tests/supply_chain.rs`
+  fails the suite if any of these is loosened.
 - **`sentinel fleet` ran outside policy, approval and audit (ADR-022).** The
   fleet path consulted no policy, asked for no approval and wrote no audit
   event. It now evaluates policy per host on the controller, dispatches nothing

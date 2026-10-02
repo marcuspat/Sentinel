@@ -98,6 +98,17 @@ Every production path runs commands through `HardenedExecutor` (ADR-016):
 - **Capability ID validation**: LLM-supplied capability IDs are validated against `[a-zA-Z0-9._-]`
   and cross-checked against the capability registry before any invocation.
 
+### Build and Release
+
+- Dependencies are checked against the RustSec advisory database, a permissive
+  licence allow-list and a crates.io-only source policy on every push
+  (`cargo deny`, `deny.toml`).
+- CI actions are pinned to commit SHAs and run with a read-only token.
+- Release binaries are built `--locked` with the toolchain CI tested, and are
+  published with a SHA-256 file, a CycloneDX SBOM and a build provenance
+  attestation: `gh attestation verify sentinel-<target> --repo marcuspat/Sentinel`.
+- Details and limits: [docs/SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md).
+
 ## Known Limitations
 
 - Landlock confines writes only. It does not restrict reads, signals, or connections to

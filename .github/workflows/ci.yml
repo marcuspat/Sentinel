@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: ["main"]
 
+# Least privilege: nothing here writes to the repository.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
@@ -16,19 +20,20 @@ jobs:
     name: Build & Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # Pinned, not `stable`: a new stable release adds clippy lints, and
       # `-D warnings` then fails CI for code nobody touched (1.99 did this via
-      # `double_must_use` in async-trait's expansion). Bump deliberately.
+      # `double_must_use` in async-trait's expansion). Bump deliberately —
+      # the procedure is in docs/SUPPLY_CHAIN.md.
       - name: Install Rust ${{ env.RUST_TOOLCHAIN }}
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy, rustfmt
 
       - name: Cache cargo registry & build
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cargo/registry
@@ -40,8 +45,10 @@ jobs:
       - name: cargo fmt
         run: cargo fmt --all -- --check
 
+      # `--locked`: CI builds exactly what Cargo.lock says, and fails if the
+      # lockfile is stale instead of silently resolving something newer.
       - name: cargo check
-        run: cargo check --workspace --all-targets
+        run: cargo check --workspace --all-targets --locked
 
       - name: cargo test
         shell: bash
@@ -80,3 +87,17 @@ jobs:
               | grep -v 'could not compile' | head -9 \
               | while IFS= read -r line; do echo "::error::${line}"; done || true
           fi
+
+  supply-chain:
+    name: Supply chain (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # Advisories (the RustSec database `cargo audit` reads), licences,
+      # banned/wildcard dependencies and crate sources. Configured in deny.toml.
+      - name: cargo deny check
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check
+          arguments: --all-features

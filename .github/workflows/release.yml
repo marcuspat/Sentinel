@@ -15,32 +15,34 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  RUST_TOOLCHAIN: "1.97.0" # keep in step with ci.yml
+  CYCLONEDX_VERSION: "0.5.9"
 
 jobs:
   verify:
     name: Verify
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@master
+      - name: Install Rust ${{ env.RUST_TOOLCHAIN }}
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         with:
-          toolchain: "1.97.0" # keep in step with ci.yml
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy, rustfmt
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: cargo test
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
       - name: cargo audit
-        uses: rustsec/audit-check@v2
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -48,6 +50,10 @@ jobs:
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     needs: verify
+    permissions:
+      contents: read
+      id-token: write # sign the provenance attestation (Sigstore, keyless)
+      attestations: write # store it against the repository
     strategy:
       fail-fast: false
       matrix:
@@ -62,16 +68,19 @@ jobs:
           - target: x86_64-apple-darwin
             os: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      # The same pinned compiler that CI tested with, not whatever `stable`
+      # happens to be on release day.
+      - name: Install Rust ${{ env.RUST_TOOLCHAIN }}
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: ${{ matrix.target }}
 
@@ -91,8 +100,28 @@ jobs:
           cd dist
           shasum -a 256 "sentinel-${{ matrix.target }}" > "sentinel-${{ matrix.target }}.sha256"
 
+      # CycloneDX SBOM of exactly the dependency set compiled into this
+      # target's binary, published next to it.
+      - name: Generate SBOM
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo install cargo-cyclonedx --locked --version "${CYCLONEDX_VERSION}"
+          cargo cyclonedx --manifest-path sentinel-tui/Cargo.toml --format json \
+            --describe binaries --target "${{ matrix.target }}" --target-in-filename
+          cp "sentinel-tui/sentinel_bin_${{ matrix.target }}.cdx.json" \
+            "dist/sentinel-${{ matrix.target }}.cdx.json"
+
+      # SLSA build provenance: binds the binary's digest to this workflow run
+      # and commit. Verify with
+      #   gh attestation verify sentinel-<target> --repo marcuspat/Sentinel
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: dist/sentinel-${{ matrix.target }}
+
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: sentinel-${{ matrix.target }}
           path: dist/
@@ -104,12 +133,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: artifacts
           merge-multiple: true
@@ -135,7 +164,7 @@ jobs:
           fi
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           name: Sentinel ${{ github.event.inputs.tag || github.ref_name }}
