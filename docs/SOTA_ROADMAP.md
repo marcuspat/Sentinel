@@ -72,3 +72,4 @@ fixing them.
 | 9 | LLM resilience | *(tenth feature commit)* | 587 | Token budget can be overshot by one response; providers reporting no usage count as zero tokens. Fakes and `wiremock` only |
 | 10 | Observability | *(eleventh feature commit)* | 597 | The ADR-011 metrics had never been wired to anything. No OTLP exporter bundled (14e); counters are per process |
 | 11 | Fleet hardening | *(twelfth feature commit)* | 612 | `sentinel fleet` had no working remote command, no policy, no audit, and two injection routes. Tested with a fake `ssh`, not a real server. No staged rollout on this path (14f) |
+| 11b | CI flake | *(follow-up commits)* | 612 | One of two CI runs failed. First guess (fleet tests racing on a script) was wrong; test-failure annotations then named the real cause: the loop-10 span tests used a thread-local `tracing` subscriber, which is unreliable under parallel tests. Moved to their own test binary with a process-wide subscriber |
