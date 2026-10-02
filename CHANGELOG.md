@@ -95,6 +95,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   built-ins and `LlmBackend::complete_with_tools`. `SENTINEL_NATIVE_TOOLS=off`
   restores the text protocol. Tested against `wiremock` only; not yet run
   against the live API
+- **Native tool use for OpenAI and Ollama (ADR-017).** OpenAI function calling
+  (`tool_choice: "required"`, parallel calls off), on by default for
+  api.openai.com and opt-in for OpenAI-compatible servers. Ollama tool calling
+  is opt-in per backend (`with_native_tools(true)`) since it depends on the
+  model. Malformed OpenAI `arguments` fail the turn. `wiremock` only
 - **MCP policy gate** (`sentinel-mcp` crate, ADR-013): `sentinel serve --mcp`
   speaks MCP over stdio and exposes five tools: `sentinel_capabilities`,
   `sentinel_policy_check` (dry policy evaluation with the matching rule),

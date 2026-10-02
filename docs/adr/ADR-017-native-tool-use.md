@@ -71,7 +71,26 @@ sent to the live Anthropic API** (the project does not make paid calls in
 testing). The first real run is the validation; `SENTINEL_NATIVE_TOOLS=off`
 restores the previous behaviour if it misbehaves.
 
-OpenAI and Ollama still use the text protocol; that is the next roadmap item.
+
+## Amendment: OpenAI and Ollama
+
+- **OpenAI** (`/v1/chat/completions`): `tools` as `function` entries,
+  `tool_choice: "required"` or a named function, `parallel_tool_calls: false`.
+  `arguments` arrives as a JSON string; a malformed document fails the turn
+  rather than becoming an empty argument object. On by default only for
+  `https://api.openai.com`. "OpenAI-compatible" servers (LM Studio, vLLM, …)
+  differ in what they implement, so a custom base URL stays on the text
+  protocol unless the caller opts in with `with_native_tools(true)`.
+- **Ollama** (`/api/chat`): the same `function` tool shape; arguments arrive as
+  a JSON object. Opt-in (`with_native_tools(true)`) because support depends on
+  the model and many local models reject a request that carries `tools`.
+  Ollama has no `tool_choice`, so a call cannot be forced: for a named choice
+  only that tool is offered, and a model that answers in text fails the turn.
+- The function-tool conversion is shared between the two backends.
+
+Same caveat as above: `wiremock` only, no live request to either API. The
+OpenAI request still sends `max_tokens`; newer OpenAI models expect
+`max_completion_tokens`, which predates this change and is not addressed here.
 
 ## Alternatives considered
 
