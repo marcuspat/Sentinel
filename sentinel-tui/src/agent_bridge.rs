@@ -14,7 +14,8 @@ use tracing::{error, info};
 use uuid::Uuid;
 
 use sentinel_agent_llm::{
-    AnthropicBackend, CapabilityRegistry, LlmBackend, OpenAiBackend, ReasoningConfig, ReasoningLoop,
+    AnthropicBackend, Budget, CapabilityRegistry, LlmBackend, OpenAiBackend, ReasoningConfig,
+    ReasoningLoop, ResilientBackend, RetryPolicy,
 };
 use sentinel_audit::AuditLog;
 use sentinel_capabilities::all_capabilities;
@@ -92,6 +93,14 @@ async fn run_inner(
         }
         other => return Err(anyhow::anyhow!("unknown backend '{other}'")),
     };
+
+    // Retries with backoff, a per-request deadline and a hard session budget
+    // (ADR-020).  Limits come from SENTINEL_MAX_LLM_CALLS / _TOKENS.
+    let backend: Box<dyn LlmBackend> = Box::new(ResilientBackend::with(
+        backend,
+        RetryPolicy::default(),
+        Budget::from_env(),
+    ));
 
     // ── 2. Assemble capabilities, registry, policy, and audit log ─────────────
     let executor = Arc::new(HardenedExecutor::for_builtin_capabilities());

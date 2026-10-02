@@ -105,6 +105,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   now capped per observation
 
 ### Added
+- **LLM retries, deadlines and session budgets (ADR-020).** Model calls made by
+  `sentinel run` and the TUI are retried up to four times on rate limits,
+  `5xx`/`529` and network errors, with jittered exponential backoff and
+  `Retry-After` honoured (waits over 60 s are refused). Each attempt has a
+  deadline. A session is capped at 100 model calls and 2,000,000 tokens
+  (`SENTINEL_MAX_LLM_CALLS`, `SENTINEL_MAX_LLM_TOKENS`; `0` = unlimited);
+  beyond that no request is made. Provider response bodies are read with an
+  8 MiB cap instead of being buffered without limit
 - **Policy files (ADR-018).** `--policy FILE` / `$SENTINEL_POLICY` loads
   operator rules and resource guards from TOML for `run`, the TUI,
   `serve --mcp`, `execute` and `policy`. In the default `tighten` mode file

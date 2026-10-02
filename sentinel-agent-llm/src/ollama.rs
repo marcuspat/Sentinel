@@ -152,10 +152,7 @@ impl OllamaBackend {
         let status_u16 = status.as_u16();
 
         if !status.is_success() {
-            let body_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "<unreadable body>".to_string());
+            let body_text = crate::http::text_capped(response, crate::http::MAX_ERROR_BYTES).await;
             warn!(status = status_u16, body = %body_text, "Ollama API error");
             return Err(AgentError::ApiError {
                 status: status_u16,
@@ -163,9 +160,8 @@ impl OllamaBackend {
             });
         }
 
-        let api_response: OllamaResponse = response.json().await.map_err(|e| {
-            AgentError::InvalidResponse(format!("failed to parse Ollama response: {e}"))
-        })?;
+        let api_response: OllamaResponse =
+            crate::http::json_capped(response, crate::http::MAX_RESPONSE_BYTES).await?;
 
         if !api_response.done {
             warn!("Ollama response marked as not done");

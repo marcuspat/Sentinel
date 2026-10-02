@@ -38,7 +38,7 @@ milestones M2–M3) and the "Known Limitations" section of `SECURITY.md`.
 - [x] **6. Plan-store locking.** Per-plan `flock`, atomic `Approved -> Executing` claim, locked `approve`/`reject`, `fsync`ed writes. The double-execution race was real and is reproduced by a test. *552 → 556 tests.*
 - [x] **7. One plan executor.** New `sentinel-runner` crate used by `run`, the TUI and `execute`; approval covers the plan; `Failure` is a failure; halt on first failure (ADR-019). *556 → 573 tests.*
 - [x] **8. Rollback.** Done with item 7: reverse-order `invoke_inverse` in the shared executor, policy-checked, audited as `CapabilityRolledBack` only on success, `--no-rollback` opt-out on every path.
-- [ ] **9. LLM resilience.** Per-request timeouts, bounded retry with jittered backoff on 429/5xx/`overloaded`, `Retry-After` honoured, response-size cap, and a hard per-session token/iteration budget.
+- [x] **9. LLM resilience.** `ResilientBackend`: per-attempt deadline, bounded retries with jittered backoff, `Retry-After` honoured, per-session call and token budget, capped response bodies (ADR-020). *573 → 587 tests.*
 - [ ] **10. Observability.** OpenTelemetry GenAI semantic-convention spans (`gen_ai.*`) for every model call and capability invocation, token accounting in Prometheus metrics. No collector required; spans are no-ops unless an exporter is configured.
 - [ ] **11. Fleet hardening.** Constant-time fingerprint comparison (`subtle`), and replace or clearly gate the `controller` / `agent_client` stubs. (`SECURITY.md` known limitation)
 - [ ] **12. TUI pending-plans tab.** List `PendingApproval` gate plans with approve / reject, reusing `PlanStore`. (SPEC A.7 #1)
@@ -67,3 +67,4 @@ fixing them.
 | 6 | Policy files | *(seventh feature commit)* | 552 | Found resource guards miss `log_dir` / `cache_dirs` and unit-name variants (item 14b). Policy file is not yet hashed into the audit log (14c) |
 | 7 | Plan-store locking | *(eighth feature commit)* | 556 | Double execution confirmed (race tests fail 3/3 with the lock disabled). Killed executor leaves a plan stuck in `Executing` (14d); advisory lock does not cover NFS |
 | 8 | One plan executor + rollback | *(ninth feature commit)* | 573 | Loop executor marked `Failure` results as completed and never ran approved Medium mutating steps; both fixed. `depends_on` is unused; step-by-step approval is still whole-plan |
+| 9 | LLM resilience | *(tenth feature commit)* | 587 | Token budget can be overshot by one response; providers reporting no usage count as zero tokens. Fakes and `wiremock` only |

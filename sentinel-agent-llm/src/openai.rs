@@ -198,10 +198,7 @@ impl OpenAiBackend {
         }
 
         if !status.is_success() {
-            let body_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "<unreadable body>".to_string());
+            let body_text = crate::http::text_capped(response, crate::http::MAX_ERROR_BYTES).await;
             let message = serde_json::from_str::<OpenAiErrorBody>(&body_text)
                 .map(|e| e.error.message)
                 .unwrap_or(body_text);
@@ -212,10 +209,7 @@ impl OpenAiBackend {
             });
         }
 
-        response
-            .json()
-            .await
-            .map_err(|e| AgentError::InvalidResponse(format!("failed to parse response: {e}")))
+        crate::http::json_capped(response, crate::http::MAX_RESPONSE_BYTES).await
     }
 
     fn completions_url(&self) -> String {

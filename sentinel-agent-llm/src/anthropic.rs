@@ -165,10 +165,7 @@ impl AnthropicBackend {
         }
 
         if !status.is_success() {
-            let body_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "<unreadable body>".to_string());
+            let body_text = crate::http::text_capped(response, crate::http::MAX_ERROR_BYTES).await;
             // Try to extract structured error message.
             let message = serde_json::from_str::<AnthropicErrorBody>(&body_text)
                 .map(|e| e.error.message)
@@ -180,10 +177,7 @@ impl AnthropicBackend {
             });
         }
 
-        response
-            .json()
-            .await
-            .map_err(|e| AgentError::InvalidResponse(format!("failed to parse response: {e}")))
+        crate::http::json_capped(response, crate::http::MAX_RESPONSE_BYTES).await
     }
 
     fn messages_url(&self) -> String {

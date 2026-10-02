@@ -14,7 +14,8 @@ use tokio::sync::{mpsc, Mutex};
 use tracing_subscriber::{fmt, EnvFilter};
 
 use sentinel_agent_llm::{
-    AnthropicBackend, CapabilityRegistry, LlmBackend, OpenAiBackend, ReasoningConfig, ReasoningLoop,
+    AnthropicBackend, Budget, CapabilityRegistry, LlmBackend, OpenAiBackend, ReasoningConfig,
+    ReasoningLoop, ResilientBackend, RetryPolicy,
 };
 use sentinel_audit::AuditLog;
 use sentinel_capabilities::all_capabilities;
@@ -405,6 +406,14 @@ async fn run_agent(
             ))
         }
     };
+
+    // Retries with backoff, a per-request deadline and a hard session budget
+    // (ADR-020).  Limits come from SENTINEL_MAX_LLM_CALLS / _TOKENS.
+    let backend: Box<dyn LlmBackend> = Box::new(ResilientBackend::with(
+        backend,
+        RetryPolicy::default(),
+        Budget::from_env(),
+    ));
 
     // 2. Executor + real capability implementations.
     let executor = Arc::new(HardenedExecutor::for_builtin_capabilities());

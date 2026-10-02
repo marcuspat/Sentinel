@@ -16,6 +16,12 @@ pub enum AgentError {
     #[error("Policy denied execution: {0}")]
     PolicyDenied(String),
 
+    #[error("Model request timed out after {ms}ms")]
+    Timeout { ms: u64 },
+
+    #[error("Session budget exhausted: {used} of {limit} {what} used")]
+    BudgetExceeded { what: String, used: u64, limit: u64 },
+
     #[error("Investigation limit reached ({max} rounds)")]
     InvestigationLimitReached { max: u32 },
 
