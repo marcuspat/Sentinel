@@ -74,6 +74,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `SuspectedPromptInjection` event
 
 ### Fixed
+- **An approved plan could be executed twice.** `sentinel execute` read the
+  plan, checked it was `Approved`, then wrote `Executing`: two processes
+  started together both passed the check and both ran every step. Status
+  transitions now run under an exclusive `flock` on a per-plan lock file, and
+  `Approved -> Executing` is a single atomic claim that exactly one caller
+  wins. The same race between `approve` and `reject` could leave one
+  operator's status next to the other's decision record; also closed. Plan
+  writes are now `fsync`ed (file and directory), so a crash cannot leave an
+  empty plan document
 - A plan step that hit the MCP gate's per-step timeout left its child process
   running. Children are now killed when the step's future is dropped
 - CI failed on untouched code when Rust 1.99 shipped a clippy lint

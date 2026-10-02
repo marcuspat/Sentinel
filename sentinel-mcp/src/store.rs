@@ -11,10 +11,16 @@
 //! risk tier).  Approval pins that hash; execution refuses to run a plan whose
 //! current content no longer matches the approved hash.
 //!
-//! Writes are atomic (write to a temp file in the same directory, then
-//! `rename`).  The store is not a lock manager: two operators approving and
-//! executing the same plan concurrently is guarded only by the status
-//! transition check, which is read-modify-write on a single file.
+//! Writes are atomic and durable (write to a temp file in the same directory,
+//! `fsync`, `rename`, `fsync` the directory).
+//!
+//! Every status transition is read-modify-write, so it runs under an
+//! exclusive `flock` on a per-plan lock file (`.<plan_id>.lock`).  Two
+//! `sentinel execute` processes racing for the same approved plan therefore
+//! cannot both claim it: the second one sees `Executing` and is refused.
+//! The lock file is separate from the plan document because `rename`
+//! replaces the document's inode, which would silently drop a lock held on
+//! it.
 
 use std::path::{Path, PathBuf};
 
@@ -202,6 +208,13 @@ pub enum StoreError {
     Serde(#[from] serde_json::Error),
 }
 
+/// Exclusive advisory lock on one plan, released when dropped (or when the
+/// process dies, which is why this is `flock` and not a marker file).
+#[derive(Debug)]
+pub struct PlanLock {
+    _file: std::fs::File,
+}
+
 /// Directory-backed store of [`StoredPlan`] documents.
 #[derive(Debug, Clone)]
 pub struct PlanStore {
@@ -225,16 +238,105 @@ impl PlanStore {
         self.dir.join(format!("{id}.json"))
     }
 
-    /// Persist a record atomically.
+    /// Take the exclusive lock for plan `id`, blocking until it is free.
+    ///
+    /// Critical sections are a few small file operations, so waiting is
+    /// brief.  On non-Unix targets this is a no-op handle.
+    pub fn lock(&self, id: Uuid) -> Result<PlanLock, StoreError> {
+        let path = self.dir.join(format!(".{id}.lock"));
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)?;
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            loop {
+                // SAFETY: `file` is an open descriptor owned by this scope.
+                if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+                    break;
+                }
+                let err = std::io::Error::last_os_error();
+                if err.kind() != std::io::ErrorKind::Interrupted {
+                    return Err(err.into());
+                }
+            }
+        }
+        Ok(PlanLock { _file: file })
+    }
+
+    /// Persist a record atomically and durably.
+    ///
+    /// This does not take the plan lock.  Use it for a brand-new plan, or
+    /// while holding [`PlanStore::lock`]; for a status change use
+    /// [`PlanStore::update`] or one of the transition methods.
     pub fn save(&self, rec: &StoredPlan) -> Result<(), StoreError> {
+        use std::io::Write;
         let final_path = self.path_for(rec.plan.id);
         let tmp_path = self
             .dir
             .join(format!(".{}.{}.tmp", rec.plan.id, Uuid::new_v4()));
         let body = serde_json::to_vec_pretty(rec)?;
-        std::fs::write(&tmp_path, body)?;
-        std::fs::rename(&tmp_path, &final_path)?;
+        let write = || -> std::io::Result<()> {
+            let mut tmp = std::fs::File::create(&tmp_path)?;
+            tmp.write_all(&body)?;
+            // Data must be on disk before the rename makes it the plan of
+            // record; otherwise a crash can leave an empty document.
+            tmp.sync_all()?;
+            std::fs::rename(&tmp_path, &final_path)?;
+            // Make the rename itself durable.
+            #[cfg(unix)]
+            std::fs::File::open(&self.dir)?.sync_all()?;
+            Ok(())
+        };
+        if let Err(e) = write() {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(e.into());
+        }
         Ok(())
+    }
+
+    /// Load, modify and save a plan under its lock.  `change` sees the
+    /// current on-disk record; returning an error leaves the plan untouched.
+    pub fn update<F>(&self, id: Uuid, change: F) -> Result<StoredPlan, StoreError>
+    where
+        F: FnOnce(&mut StoredPlan) -> Result<(), StoreError>,
+    {
+        let _lock = self.lock(id)?;
+        let mut rec = self.load(id)?;
+        change(&mut rec)?;
+        self.save(&rec)?;
+        Ok(rec)
+    }
+
+    /// Atomically transition `Approved -> Executing`.
+    ///
+    /// Exactly one caller wins.  Everyone else gets
+    /// [`StoreError::InvalidTransition`] (or `IntegrityMismatch` when the
+    /// plan body no longer matches the approved hash) and must not run it.
+    pub fn claim_for_execution(
+        &self,
+        id: Uuid,
+        audit_file: Option<String>,
+    ) -> Result<StoredPlan, StoreError> {
+        self.update(id, |rec| {
+            expect_status(rec, PlanStatus::Approved)?;
+            if !rec.integrity_ok() {
+                return Err(StoreError::IntegrityMismatch(id));
+            }
+            rec.status = PlanStatus::Executing;
+            rec.execution = Some(ExecutionRecord {
+                started_at: Utc::now(),
+                finished_at: None,
+                steps_completed: 0,
+                steps_failed: 0,
+                steps_skipped: 0,
+                audit_file,
+                error: None,
+            });
+            Ok(())
+        })
     }
 
     /// Load a record.  Does *not* check integrity; callers that are about to
@@ -284,22 +386,22 @@ impl PlanStore {
         by: &str,
         audit_file: Option<String>,
     ) -> Result<StoredPlan, StoreError> {
-        let mut rec = self.load(id)?;
-        expect_status(&rec, PlanStatus::PendingApproval)?;
-        if !rec.integrity_ok() {
-            return Err(StoreError::IntegrityMismatch(id));
-        }
-        rec.status = PlanStatus::Approved;
-        rec.plan.approve();
-        rec.decision = Some(OperatorDecision {
-            by: by.to_string(),
-            at: Utc::now(),
-            approved_hash: Some(rec.content_hash.clone()),
-            reason: None,
-            audit_file,
-        });
-        self.save(&rec)?;
-        Ok(rec)
+        self.update(id, |rec| {
+            expect_status(rec, PlanStatus::PendingApproval)?;
+            if !rec.integrity_ok() {
+                return Err(StoreError::IntegrityMismatch(id));
+            }
+            rec.status = PlanStatus::Approved;
+            rec.plan.approve();
+            rec.decision = Some(OperatorDecision {
+                by: by.to_string(),
+                at: Utc::now(),
+                approved_hash: Some(rec.content_hash.clone()),
+                reason: None,
+                audit_file,
+            });
+            Ok(())
+        })
     }
 
     /// Transition `PendingApproval -> Rejected`.
@@ -310,19 +412,19 @@ impl PlanStore {
         reason: &str,
         audit_file: Option<String>,
     ) -> Result<StoredPlan, StoreError> {
-        let mut rec = self.load(id)?;
-        expect_status(&rec, PlanStatus::PendingApproval)?;
-        rec.status = PlanStatus::Rejected;
-        rec.plan.reject(reason);
-        rec.decision = Some(OperatorDecision {
-            by: by.to_string(),
-            at: Utc::now(),
-            approved_hash: None,
-            reason: Some(reason.to_string()),
-            audit_file,
-        });
-        self.save(&rec)?;
-        Ok(rec)
+        self.update(id, |rec| {
+            expect_status(rec, PlanStatus::PendingApproval)?;
+            rec.status = PlanStatus::Rejected;
+            rec.plan.reject(reason);
+            rec.decision = Some(OperatorDecision {
+                by: by.to_string(),
+                at: Utc::now(),
+                approved_hash: None,
+                reason: Some(reason.to_string()),
+                audit_file,
+            });
+            Ok(())
+        })
     }
 }
 
@@ -453,5 +555,131 @@ mod tests {
             store.save(&rec).unwrap();
         }
         assert_eq!(store.list().unwrap().len(), 3);
+    }
+
+    /// Many threads race to claim the same approved plan.  Each opens its own
+    /// store handle (its own file descriptors), as separate processes would.
+    #[test]
+    fn only_one_claimant_wins_the_race() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = PlanStore::open(dir.path()).unwrap();
+        let rec = StoredPlan::new_pending(sample_plan(), "localhost", Uuid::new_v4(), None);
+        let id = rec.plan.id;
+        store.save(&rec).unwrap();
+        store.approve(id, "alice", None).unwrap();
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(16));
+        let handles: Vec<_> = (0..16)
+            .map(|i| {
+                let state = dir.path().to_path_buf();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let store = PlanStore::open(&state).unwrap();
+                    barrier.wait();
+                    store.claim_for_execution(id, Some(format!("audit-{i}")))
+                })
+            })
+            .collect();
+        let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+        let winners = results.iter().filter(|r| r.is_ok()).count();
+        assert_eq!(winners, 1, "exactly one execution may start");
+        for r in results.iter().filter(|r| r.is_err()) {
+            assert!(
+                matches!(
+                    r,
+                    Err(StoreError::InvalidTransition {
+                        actual: PlanStatus::Executing,
+                        ..
+                    })
+                ),
+                "{r:?}"
+            );
+        }
+        assert_eq!(store.load(id).unwrap().status, PlanStatus::Executing);
+    }
+
+    #[test]
+    fn approve_and_reject_cannot_both_succeed() {
+        for _ in 0..20 {
+            let dir = tempfile::tempdir().unwrap();
+            let store = PlanStore::open(dir.path()).unwrap();
+            let rec = StoredPlan::new_pending(sample_plan(), "localhost", Uuid::new_v4(), None);
+            let id = rec.plan.id;
+            store.save(&rec).unwrap();
+
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let (s1, b1) = (store.clone(), barrier.clone());
+            let approve = std::thread::spawn(move || {
+                b1.wait();
+                s1.approve(id, "alice", None).is_ok()
+            });
+            let (s2, b2) = (store.clone(), barrier.clone());
+            let reject = std::thread::spawn(move || {
+                b2.wait();
+                s2.reject(id, "bob", "no", None).is_ok()
+            });
+            let (approved, rejected) = (approve.join().unwrap(), reject.join().unwrap());
+            assert!(approved ^ rejected, "exactly one decision is recorded");
+
+            let stored = store.load(id).unwrap();
+            let expected = if approved {
+                PlanStatus::Approved
+            } else {
+                PlanStatus::Rejected
+            };
+            assert_eq!(stored.status, expected);
+            // The recorded decision matches the status: no torn write where
+            // one operator's status sits next to the other's decision.
+            let by = &stored.decision.as_ref().unwrap().by;
+            assert_eq!(by, if approved { "alice" } else { "bob" });
+        }
+    }
+
+    #[test]
+    fn claim_refuses_unapproved_and_tampered_plans() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = PlanStore::open(dir.path()).unwrap();
+        let rec = StoredPlan::new_pending(sample_plan(), "localhost", Uuid::new_v4(), None);
+        let id = rec.plan.id;
+        store.save(&rec).unwrap();
+
+        assert!(matches!(
+            store.claim_for_execution(id, None),
+            Err(StoreError::InvalidTransition {
+                actual: PlanStatus::PendingApproval,
+                ..
+            })
+        ));
+
+        let mut approved = store.approve(id, "alice", None).unwrap();
+        approved.plan.steps[0].args = serde_json::json!({"log_dir": "/", "older_than_days": 0});
+        store.save(&approved).unwrap();
+        assert!(matches!(
+            store.claim_for_execution(id, None),
+            Err(StoreError::IntegrityMismatch(_))
+        ));
+        assert_eq!(
+            store.load(id).unwrap().status,
+            PlanStatus::Approved,
+            "a refused claim leaves the plan untouched"
+        );
+    }
+
+    #[test]
+    fn failed_update_leaves_no_temp_files_and_list_ignores_lock_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = PlanStore::open(dir.path()).unwrap();
+        let rec = StoredPlan::new_pending(sample_plan(), "localhost", Uuid::new_v4(), None);
+        let id = rec.plan.id;
+        store.save(&rec).unwrap();
+        let _ = store.claim_for_execution(id, None); // refused: takes the lock
+        assert_eq!(store.list().unwrap().len(), 1);
+        let leftovers: Vec<_> = std::fs::read_dir(store.dir())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
     }
 }

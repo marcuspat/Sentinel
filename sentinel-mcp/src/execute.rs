@@ -26,7 +26,7 @@ use sentinel_policy::{PolicyEffect, PolicyEvaluator, PolicyRequest};
 
 use crate::audit::AuditSink;
 use crate::gate::{effect_label, CapabilitySet};
-use crate::store::{expect_status, ExecutionRecord, PlanStatus, PlanStore, StoreError};
+use crate::store::{PlanStatus, PlanStore, StoreError};
 
 /// Per-step outcome reported back to the operator.
 #[derive(Debug, Clone, Serialize)]
@@ -67,43 +67,34 @@ pub async fn execute_approved_plan(
     audit: &AuditSink,
     step_timeout_ms: u64,
 ) -> Result<ExecuteReport, ExecuteError> {
-    let mut rec = store.load(plan_id)?;
-    if rec.status != PlanStatus::Approved {
-        // Record the refused attempt, then refuse.
-        let _ = audit
-            .record(AuditEventType::PolicyDenied {
-                capability_id: format!("plan:{plan_id}"),
-                reason: format!("execution refused: plan status is {}", rec.status),
-            })
-            .await;
-        return Err(ExecuteError::NotApproved {
-            id: plan_id,
-            status: rec.status,
-        });
-    }
-    if !rec.integrity_ok() {
-        let _ = audit
-            .record(AuditEventType::PolicyDenied {
-                capability_id: format!("plan:{plan_id}"),
-                reason: "execution refused: plan content does not match approved hash".into(),
-            })
-            .await;
-        return Err(StoreError::IntegrityMismatch(plan_id).into());
-    }
-
-    // Claim the plan so it cannot be executed twice.
-    expect_status(&rec, PlanStatus::Approved)?;
-    rec.status = PlanStatus::Executing;
-    rec.execution = Some(ExecutionRecord {
-        started_at: chrono::Utc::now(),
-        finished_at: None,
-        steps_completed: 0,
-        steps_failed: 0,
-        steps_skipped: 0,
-        audit_file: Some(audit.path_string()),
-        error: None,
-    });
-    store.save(&rec)?;
+    // Claim the plan: `Approved -> Executing` under the plan lock.  Of any
+    // number of concurrent `sentinel execute` processes exactly one gets
+    // past this line; the rest are refused and record the refusal.
+    let mut rec = match store.claim_for_execution(plan_id, Some(audit.path_string())) {
+        Ok(rec) => rec,
+        Err(StoreError::InvalidTransition { actual, .. }) => {
+            let _ = audit
+                .record(AuditEventType::PolicyDenied {
+                    capability_id: format!("plan:{plan_id}"),
+                    reason: format!("execution refused: plan status is {actual}"),
+                })
+                .await;
+            return Err(ExecuteError::NotApproved {
+                id: plan_id,
+                status: actual,
+            });
+        }
+        Err(StoreError::IntegrityMismatch(id)) => {
+            let _ = audit
+                .record(AuditEventType::PolicyDenied {
+                    capability_id: format!("plan:{plan_id}"),
+                    reason: "execution refused: plan content does not match approved hash".into(),
+                })
+                .await;
+            return Err(StoreError::IntegrityMismatch(id).into());
+        }
+        Err(e) => return Err(e.into()),
+    };
 
     let approver = rec
         .decision

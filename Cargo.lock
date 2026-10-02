@@ -2589,6 +2589,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "hex",
+ "libc",
  "sentinel-audit",
  "sentinel-capabilities",
  "sentinel-core",
