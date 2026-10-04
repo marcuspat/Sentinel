@@ -816,10 +816,8 @@ mod tests {
             // BPF class mask 0x07: 0x05 = BPF_JMP (conditional, carries jt/jf)
             if f.code & 0x07 == 0x05 {
                 jumps += 1;
-                for (name, target) in [
-                    ("jt", i + 1 + f.jt as usize),
-                    ("jf", i + 1 + f.jf as usize),
-                ] {
+                for (name, target) in [("jt", i + 1 + f.jt as usize), ("jf", i + 1 + f.jf as usize)]
+                {
                     assert!(
                         target < len,
                         "instruction {i} {name} target {target} out of bounds (len {len})"
@@ -829,14 +827,25 @@ mod tests {
         }
         // the filter is jumps + loads + returns; with no jumps this test
         // verified nothing
-        assert!(jumps >= 5, "expected the documented jump chain, walked {jumps}");
+        assert!(
+            jumps >= 5,
+            "expected the documented jump chain, walked {jumps}"
+        );
         // as-built targets (indices match the /* n */ comments in the filter):
         // 4 x32-bit → 13 ENOSYS · 5 io_uring_setup → 13 · 6 socket else → 11
         // ALLOW · 8/9/10 AF_INET/6/PACKET → 12 EACCES
         let t = |i: usize, jt: u8| i + 1 + jt as usize;
         assert_eq!(t(4, insns[4].jt), 13, "x32-bit jump must reach ENOSYS");
-        assert_eq!(t(5, insns[5].jt), 13, "io_uring_setup jump must reach ENOSYS");
-        assert_eq!(t(6, insns[6].jf), 11, "non-socket fall-through must reach ALLOW");
+        assert_eq!(
+            t(5, insns[5].jt),
+            13,
+            "io_uring_setup jump must reach ENOSYS"
+        );
+        assert_eq!(
+            t(6, insns[6].jf),
+            11,
+            "non-socket fall-through must reach ALLOW"
+        );
         assert_eq!(t(8, insns[8].jt), 12, "AF_INET must reach EACCES");
         assert_eq!(t(9, insns[9].jt), 12, "AF_INET6 must reach EACCES");
         assert_eq!(t(10, insns[10].jt), 12, "AF_PACKET must reach EACCES");
