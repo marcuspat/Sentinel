@@ -144,9 +144,12 @@ impl AuditLog {
             metrics.flush();
         }
 
-        // Sign the new head.  The event is already durable; if the
-        // checkpoint cannot be written the caller still gets an error, so a
-        // signing-enabled deployment never silently produces unsigned events.
+        // Sign the new head.  CONTRACT (gate r1): the event is ALREADY durable
+        // when this block runs — a sidecar failure surfaces as Err with the
+        // event nonetheless in the chain. Callers must read this error as
+        // "recorded but unsigned", never "not recorded": aborting is correct
+        // (no further event should outpace the missing checkpoint), and
+        // verify-audit detects the unsigned tail rather than trusting it.
         if let Some(signer) = self.signer.clone() {
             let checkpoint = signer.sign(self.session_id, self.next_sequence, &self.last_hash);
             if let Some(ref path) = self.file_path {

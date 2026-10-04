@@ -415,6 +415,11 @@ mod seccomp {
         pub fn len(&self) -> usize {
             self.prog.len as usize
         }
+
+        #[cfg(test)]
+        pub fn insns(&self) -> &[libc::sock_filter] {
+            &self._insns
+        }
     }
 
     const fn stmt(code: u16, k: u32) -> libc::sock_filter {
@@ -794,10 +799,38 @@ mod tests {
         any(target_arch = "x86_64", target_arch = "aarch64")
     ))]
     #[test]
-    fn seccomp_filter_jump_targets_stay_in_bounds() {
-        // A wrong offset would be rejected by the kernel at install time and
-        // fail every spawn; catch it here with a readable message.
+    fn seccomp_jump_targets_land_in_bounds_on_ret_instructions() {
+        // gate r1: a length assertion cannot fail for an off-by-one jt/jf —
+        // exactly the bug this test exists to catch. Walk every conditional
+        // jump: both taken and not-taken targets must be an in-bounds RET.
         let filter = seccomp::deny_inet_filter().unwrap();
-        assert_eq!(filter.len(), 14);
+        let insns = filter.insns();
+        let len = insns.len();
+        assert!(len >= 3, "filter suspiciously short: {len}");
+        let mut jumps = 0;
+        for (i, f) in insns.iter().enumerate() {
+            // BPF class mask 0x07: 0x05 = BPF_JMP (conditional, carries jt/jf)
+            if f.code & 0x07 == 0x05 {
+                jumps += 1;
+                for (name, target) in [
+                    ("jt", i + 1 + f.jt as usize),
+                    ("jf", i + 1 + f.jf as usize),
+                ] {
+                    assert!(
+                        target < len,
+                        "instruction {i} {name} target {target} out of bounds (len {len})"
+                    );
+                    // BPF_RET class = 0x06 — a jump may never land mid-computation
+                    assert_eq!(
+                        insns[target].code & 0x07,
+                        0x06,
+                        "instruction {i} {name} jumps to {target}, which is not a RET"
+                    );
+                }
+            }
+        }
+        // the filter is jumps + loads + returns; with no jumps this test
+        // verified nothing
+        assert!(jumps >= 5, "expected the documented jump chain, walked {jumps}");
     }
 }

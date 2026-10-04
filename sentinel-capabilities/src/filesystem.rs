@@ -193,6 +193,25 @@ impl LogVacuum {
     }
 }
 
+/// Normalise a path lexically: collapse `//` and `.`, reject `..` outright.
+/// The vacuum's boundary check must hold on its own, not via validate_args
+/// one layer up — the CHANGELOG's "every path must sit under `log_dir`"
+/// claim is this filter's to keep (gate r1).
+fn normalise_components(p: &str) -> Option<String> {
+    let mut out: Vec<&str> = Vec::new();
+    for c in p.split('/') {
+        match c {
+            "" | "." => {}
+            ".." => return None,
+            _ => out.push(c),
+        }
+    }
+    if out.is_empty() {
+        return Some("/".to_string());
+    }
+    Some(format!("/{}", out.join("/")))
+}
+
 #[async_trait]
 impl Capability for LogVacuum {
     fn manifest(&self) -> &CapabilityManifest {
@@ -233,6 +252,13 @@ impl Capability for LogVacuum {
             return CapabilityResult::failure(e.to_string(), false);
         }
         let log_dir = args["log_dir"].as_str().unwrap();
+        // Enforce on the normalised spelling: find, the prefix filter and the
+        // Landlock allowlist must all see the same collapsed path, or a
+        // caller-supplied `app//`/`app/./` variant splits the boundary (gate r1)
+        let Some(log_dir_norm) = normalise_components(log_dir) else {
+            return CapabilityResult::failure("'log_dir' must not contain '..'".into(), false);
+        };
+        let log_dir: &str = &log_dir_norm;
         let days = args["older_than_days"].as_f64().unwrap() as i64;
         let explicit_dry = args
             .get("dry_run")
@@ -268,12 +294,20 @@ impl Capability for LogVacuum {
 
         // NUL-separated, never line-separated: a file name may contain a
         // newline, and splitting on it would turn `x\n/etc/app.log` into a
-        // second path outside `log_dir`.  Anything that is not literally
-        // under `log_dir` is dropped as well.
-        let prefix = format!("{}/", log_dir.trim_end_matches('/'));
+        // second path outside `log_dir`.  Anything that is not under the
+        // NORMALISED `log_dir` — after component collapse, with `..`
+        // rejected — is dropped as well (gate r1: the boundary holds here,
+        // not one layer up in validate_args).
+        let prefix = if log_dir == "/" {
+            "/".to_string()
+        } else {
+            format!("{}/", log_dir)
+        };
         let files: Vec<String> = find_out
             .stdout
             .split('\0')
+            .filter(|p| !p.is_empty())
+            .filter_map(|p| normalise_components(p))
             .filter(|p| p.starts_with(&prefix))
             .map(String::from)
             .collect();
@@ -495,6 +529,40 @@ mod tests {
     use super::*;
     use sentinel_exec::{CommandExecutorTrait, CommandOutput};
     use std::collections::HashMap;
+
+    // gate r1: the vacuum boundary must hold on normalised components, at the
+    // enforcement point — not only via validate_args one layer up
+    #[test]
+    fn log_vacuum_boundary_normalises_and_rejects_traversal() {
+        assert_eq!(normalise_components("/var/log"), Some("/var/log".into()));
+        assert_eq!(
+            normalise_components("/var/log//app/"),
+            Some("/var/log/app".into())
+        );
+        assert_eq!(
+            normalise_components("/var/log/./app"),
+            Some("/var/log/app".into())
+        );
+        assert_eq!(normalise_components("/"), Some("/".into()));
+        // '..' is rejected on EITHER side of the boundary, in any slot
+        assert_eq!(normalise_components("/var/log/app/../../etc"), None);
+        assert_eq!(normalise_components("/var/log/a/../b"), None);
+        assert_eq!(normalise_components(".."), None);
+        // prefix built from the normalised dir matches only what sits under it
+        let norm = normalise_components("/var/log/app").unwrap();
+        let prefix = format!("{}/", norm);
+        assert!("/var/log/app/a.log".starts_with(&prefix));
+        assert!(!"/var/log/application/x.log".starts_with(&prefix));
+        assert!(!normalise_components("/var/log/app/../../etc/x.log").unwrap_or_default().starts_with(&prefix));
+    }
+
+    #[test]
+    fn log_vacuum_rejects_traversal_log_dir_at_validation_too() {
+        let cap = LogVacuum::new(make_executor());
+        assert!(cap
+            .validate_args(&json!({ "log_dir": "/var/log/app/../../etc", "older_than_days": 7 }))
+            .is_err());
+    }
 
     struct DummyExecutor;
     #[async_trait::async_trait]
