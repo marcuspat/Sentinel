@@ -800,9 +800,13 @@ mod tests {
     ))]
     #[test]
     fn seccomp_jump_targets_land_in_bounds_on_ret_instructions() {
-        // gate r1: a length assertion cannot fail for an off-by-one jt/jf —
-        // exactly the bug this test exists to catch. Walk every conditional
-        // jump: both taken and not-taken targets must be an in-bounds RET.
+        // gate r1/r4: a length assertion cannot fail for an off-by-one jt/jf —
+        // exactly the bug this test exists to catch. Jump targets MAY legally
+        // land on a BPF_LD (the socket branch falls through to load ARG0),
+        // so the enforceable invariants are: (1) every jt/jf target stays in
+        // bounds, (2) the documented as-built targets hold — any offset edit
+        // lands somewhere else and fails here with a readable message — and
+        // (3) the three terminals are RET instructions.
         let filter = seccomp::deny_inet_filter().unwrap();
         let insns = filter.insns();
         let len = insns.len();
@@ -820,17 +824,29 @@ mod tests {
                         target < len,
                         "instruction {i} {name} target {target} out of bounds (len {len})"
                     );
-                    // BPF_RET class = 0x06 — a jump may never land mid-computation
-                    assert_eq!(
-                        insns[target].code & 0x07,
-                        0x06,
-                        "instruction {i} {name} jumps to {target}, which is not a RET"
-                    );
                 }
             }
         }
         // the filter is jumps + loads + returns; with no jumps this test
         // verified nothing
         assert!(jumps >= 5, "expected the documented jump chain, walked {jumps}");
+        // as-built targets (indices match the /* n */ comments in the filter):
+        // 4 x32-bit → 13 ENOSYS · 5 io_uring_setup → 13 · 6 socket else → 11
+        // ALLOW · 8/9/10 AF_INET/6/PACKET → 12 EACCES
+        let t = |i: usize, jt: u8| i + 1 + jt as usize;
+        assert_eq!(t(4, insns[4].jt), 13, "x32-bit jump must reach ENOSYS");
+        assert_eq!(t(5, insns[5].jt), 13, "io_uring_setup jump must reach ENOSYS");
+        assert_eq!(t(6, insns[6].jf), 11, "non-socket fall-through must reach ALLOW");
+        assert_eq!(t(8, insns[8].jt), 12, "AF_INET must reach EACCES");
+        assert_eq!(t(9, insns[9].jt), 12, "AF_INET6 must reach EACCES");
+        assert_eq!(t(10, insns[10].jt), 12, "AF_PACKET must reach EACCES");
+        // terminals: BPF_RET class = 0x06
+        for idx in [11, 12, 13] {
+            assert_eq!(
+                insns[idx].code & 0x07,
+                0x06,
+                "terminal instruction {idx} is not a RET"
+            );
+        }
     }
 }
