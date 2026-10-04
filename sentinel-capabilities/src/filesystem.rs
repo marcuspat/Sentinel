@@ -562,7 +562,9 @@ mod tests {
         let prefix = format!("{}/", norm);
         assert!("/var/log/app/a.log".starts_with(&prefix));
         assert!(!"/var/log/application/x.log".starts_with(&prefix));
-        assert!(!normalise_components("/var/log/app/../../etc/x.log").unwrap_or_default().starts_with(&prefix));
+        assert!(!normalise_components("/var/log/app/../../etc/x.log")
+            .unwrap_or_default()
+            .starts_with(&prefix));
     }
 
     #[test]
