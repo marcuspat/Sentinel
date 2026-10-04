@@ -351,7 +351,17 @@ impl HardenedExecutor {
     /// the Landlock allowlist `fs` asks for.
     fn sandbox_for(&self, fs: &FsAccess) -> SandboxConfig {
         let writable: &[PathBuf] = match fs {
-            FsAccess::Unrestricted => return self.sandbox.clone(),
+            FsAccess::Unrestricted => {
+                // gate r2: under Require, even the unrestricted profile must
+                // fail closed when the enforcement its base config asks for
+                // (deny_network, …) cannot be applied — a warn-and-run here is
+                // exactly what the operator forbad with SENTINEL_LANDLOCK=require
+                let mut base = self.sandbox.clone();
+                if self.landlock == LandlockMode::Require {
+                    base.require_enforcement = true;
+                }
+                return base;
+            }
             _ if self.landlock == LandlockMode::Off => return self.sandbox.clone(),
             FsAccess::ReadOnly => &[],
             FsAccess::WriteUnder(paths) => paths,
@@ -1214,6 +1224,9 @@ mod tests {
 
         let free = exec.sandbox_for(&FsAccess::Unrestricted);
         assert!(free.read_only_paths.is_empty() && free.writable_paths.is_empty());
+        // gate r2: unrestricted under Require still fails closed on any
+        // enforcement its base profile asks for
+        assert!(free.require_enforcement);
 
         let best = touch_exec(LandlockMode::BestEffort).sandbox_for(&FsAccess::ReadOnly);
         assert!(

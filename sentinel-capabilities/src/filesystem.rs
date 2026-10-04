@@ -198,6 +198,12 @@ impl LogVacuum {
 /// one layer up — the CHANGELOG's "every path must sit under `log_dir`"
 /// claim is this filter's to keep (gate r1).
 fn normalise_components(p: &str) -> Option<String> {
+    // Relative input can never sit under an absolute log_dir — rejecting it
+    // here keeps the boundary from quietly absolutising what validate_args
+    // would have refused (gate r2)
+    if !p.starts_with('/') {
+        return None;
+    }
     let mut out: Vec<&str> = Vec::new();
     for c in p.split('/') {
         match c {
@@ -548,6 +554,9 @@ mod tests {
         assert_eq!(normalise_components("/var/log/app/../../etc"), None);
         assert_eq!(normalise_components("/var/log/a/../b"), None);
         assert_eq!(normalise_components(".."), None);
+        // relative input is rejected, not absolutised (gate r2)
+        assert_eq!(normalise_components("var/log"), None);
+        assert_eq!(normalise_components("./var/log"), None);
         // prefix built from the normalised dir matches only what sits under it
         let norm = normalise_components("/var/log/app").unwrap();
         let prefix = format!("{}/", norm);
