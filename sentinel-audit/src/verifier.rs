@@ -13,6 +13,11 @@ impl AuditVerifier {
     ///
     /// Empty input is considered valid (zero events, zero checks).
     pub fn verify_jsonl(jsonl: &str) -> Result<ChainVerificationResult, AuditError> {
+        Ok(Self::verify_events(&Self::parse_jsonl(jsonl)?))
+    }
+
+    /// Parse a JSONL string into events without verifying anything.
+    pub fn parse_jsonl(jsonl: &str) -> Result<Vec<AuditEvent>, AuditError> {
         let mut events: Vec<AuditEvent> = Vec::new();
 
         for (line_no, line) in jsonl.lines().enumerate() {
@@ -25,7 +30,7 @@ impl AuditVerifier {
             events.push(event);
         }
 
-        Ok(Self::verify_events(&events))
+        Ok(events)
     }
 
     /// Verify that `events` forms a valid hash chain.

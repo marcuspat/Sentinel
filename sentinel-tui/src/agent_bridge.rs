@@ -14,13 +14,13 @@ use tracing::{error, info};
 use uuid::Uuid;
 
 use sentinel_agent_llm::{
-    AnthropicBackend, CapabilityRegistry, LlmBackend, OpenAiBackend, ReasoningConfig, ReasoningLoop,
+    AnthropicBackend, Budget, CapabilityRegistry, LlmBackend, OpenAiBackend, ReasoningConfig,
+    ReasoningLoop, ResilientBackend, RetryPolicy,
 };
 use sentinel_audit::AuditLog;
 use sentinel_capabilities::all_capabilities;
 use sentinel_core::{ApprovalDecision, SessionPhase};
-use sentinel_exec::RealCommandExecutor;
-use sentinel_policy::default_policy;
+use sentinel_exec::HardenedExecutor;
 
 use crate::app::{
     ApprovalOutcome, ApprovalRequest, LogEntry, LogLevel, Plan, PlanStep, SessionUpdate, StepStatus,
@@ -94,8 +94,16 @@ async fn run_inner(
         other => return Err(anyhow::anyhow!("unknown backend '{other}'")),
     };
 
+    // Retries with backoff, a per-request deadline and a hard session budget
+    // (ADR-020).  Limits come from SENTINEL_MAX_LLM_CALLS / _TOKENS.
+    let backend: Box<dyn LlmBackend> = Box::new(ResilientBackend::with(
+        backend,
+        RetryPolicy::default(),
+        Budget::from_env(),
+    ));
+
     // ── 2. Assemble capabilities, registry, policy, and audit log ─────────────
-    let executor = Arc::new(RealCommandExecutor);
+    let executor = Arc::new(HardenedExecutor::for_builtin_capabilities());
     let caps = all_capabilities(executor);
 
     let mut registry = CapabilityRegistry::new();
@@ -104,16 +112,21 @@ async fn run_inner(
     }
     let registry = Arc::new(registry);
 
-    let policy = Arc::new(default_policy());
+    let policy = Arc::new(crate::policy_source::load()?);
     let audit_path = std::path::PathBuf::from(format!("sentinel-audit-{session_id}.jsonl"));
-    let audit = Arc::new(Mutex::new(AuditLog::new(session_id, Some(audit_path))));
+    let audit = Arc::new(Mutex::new(
+        AuditLog::new(session_id, Some(audit_path)).with_signer_from_env()?,
+    ));
 
     let agent = ReasoningLoop::new(
         backend,
         registry,
         policy,
         Arc::clone(&audit),
-        ReasoningConfig::default(),
+        ReasoningConfig {
+            rollback_on_failure: crate::runtime_opts::rollback_enabled(),
+            ..ReasoningConfig::default()
+        },
     )
     .with_capabilities(caps);
 

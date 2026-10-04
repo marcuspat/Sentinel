@@ -7,7 +7,7 @@ use sentinel_core::{
     capability::ResourceImpact, Capability, CapabilityKind, CapabilityManifest, CapabilityResult,
     CoreError, ExecutionContext, RiskTier,
 };
-use sentinel_exec::CommandExecutorTrait;
+use sentinel_exec::{CommandExecutorTrait, FsAccess};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -78,7 +78,10 @@ async fn detect_pkg_manager(
         ("pacman", PkgManager::Pacman),
     ];
     for (prog, variant) in candidates {
-        if let Ok(out) = executor.run("which", &[prog], env, 4096).await {
+        if let Ok(out) = executor
+            .run_confined("which", &[prog], env, 4096, &FsAccess::ReadOnly)
+            .await
+        {
             if out.success() {
                 return Some(variant);
             }
@@ -118,6 +121,10 @@ impl Capability for PackageList {
         &self.manifest
     }
 
+    fn args_schema(&self) -> Value {
+        crate::schemas::args_schema(&self.manifest.id).unwrap_or_else(|| json!({"type": "object"}))
+    }
+
     fn validate_args(&self, args: &Value) -> Result<(), CoreError> {
         if let Some(f) = args.get("filter") {
             if !f.is_string() {
@@ -142,11 +149,12 @@ impl Capability for PackageList {
         let list_args = pm.list_args();
         let out = match self
             .executor
-            .run(
+            .run_confined(
                 pm.name(),
                 &list_args,
                 &ctx.env_overrides,
                 ctx.resource_limits.max_output_bytes,
+                &FsAccess::package_state(),
             )
             .await
         {
@@ -225,6 +233,10 @@ impl Capability for PackageUpgrade {
         &self.manifest
     }
 
+    fn args_schema(&self) -> Value {
+        crate::schemas::args_schema(&self.manifest.id).unwrap_or_else(|| json!({"type": "object"}))
+    }
+
     fn validate_args(&self, args: &Value) -> Result<(), CoreError> {
         let has_packages = args.get("packages").is_some();
         let all = args.get("all").and_then(Value::as_bool).unwrap_or(false);
@@ -263,11 +275,12 @@ impl Capability for PackageUpgrade {
             let upgrade_args = pm.upgrade_all_args();
             match self
                 .executor
-                .run(
+                .run_confined(
                     pm.name(),
                     &upgrade_args,
                     &ctx.env_overrides,
                     ctx.resource_limits.max_output_bytes,
+                    &FsAccess::Unrestricted,
                 )
                 .await
             {
@@ -286,11 +299,12 @@ impl Capability for PackageUpgrade {
             let upgrade_args = pm.upgrade_pkg_args(&pkg_refs);
             match self
                 .executor
-                .run(
+                .run_confined(
                     pm.name(),
                     &upgrade_args,
                     &ctx.env_overrides,
                     ctx.resource_limits.max_output_bytes,
+                    &FsAccess::Unrestricted,
                 )
                 .await
             {

@@ -68,6 +68,61 @@ impl HostConfig {
     }
 }
 
+impl HostConfig {
+    /// Reject host specs that `ssh` or the remote shell could misread.
+    ///
+    /// The destination is passed to `ssh` as an argument, so a hostname or
+    /// user beginning with `-` would be parsed as an option
+    /// (`-oProxyCommand=…` runs a local command).  Both are restricted to the
+    /// characters real hostnames and login names use.
+    pub fn validate(&self) -> Result<(), String> {
+        let host_ok = !self.hostname.is_empty()
+            && self.hostname.len() <= 253
+            && !self.hostname.starts_with('-')
+            && !self.hostname.starts_with('.')
+            && self
+                .hostname
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':'));
+        if !host_ok {
+            return Err(format!("invalid hostname {:?}", self.hostname));
+        }
+        let user_ok = !self.user.is_empty()
+            && self.user.len() <= 32
+            && !self.user.starts_with('-')
+            && self
+                .user
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
+        if !user_ok {
+            return Err(format!("invalid ssh user {:?}", self.user));
+        }
+        if self.port == 0 {
+            return Err("ssh port must not be 0".to_string());
+        }
+        if self.key_path.as_deref().is_some_and(|k| k.starts_with('-')) {
+            return Err("ssh key path must not start with '-'".to_string());
+        }
+        Ok(())
+    }
+}
+
+/// A capability id is interpolated into the remote command line; allow only
+/// the characters capability ids are made of.
+pub fn validate_capability_id(id: &str) -> Result<(), String> {
+    let ok = !id.is_empty()
+        && id.len() <= 64
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        && !id.starts_with('-');
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("invalid capability id {id:?}"))
+    }
+}
+
 /// A fleet — an ordered collection of [`HostConfig`]s.
 #[derive(Debug, Clone, Default)]
 pub struct FleetConfig {
@@ -139,6 +194,9 @@ pub trait HostExecutor: Send + Sync {
 pub struct SshHostExecutor {
     /// Name of the Sentinel binary on the remote host.
     remote_binary: String,
+    /// Pass `--approved` to the remote agent: the operator approved this
+    /// run on the controller.
+    approved: bool,
 }
 
 impl SshHostExecutor {
@@ -146,7 +204,15 @@ impl SshHostExecutor {
     pub fn new(remote_binary: impl Into<String>) -> Self {
         Self {
             remote_binary: remote_binary.into(),
+            approved: false,
         }
+    }
+
+    /// Tell the remote agent that the operator approved this run.  The
+    /// remote host still applies its own policy and refuses anything denied.
+    pub fn with_approval(mut self, approved: bool) -> Self {
+        self.approved = approved;
+        self
     }
 }
 
@@ -175,6 +241,9 @@ fn build_ssh_args(host: &HostConfig, remote_cmd: &str) -> Vec<String> {
         args.push("-i".to_string());
         args.push(key.clone());
     }
+    // End of options: whatever follows is the destination and the command,
+    // never a flag.
+    args.push("--".to_string());
     args.push(format!("{}@{}", host.user, host.hostname));
     args.push(remote_cmd.to_string());
     args
@@ -195,11 +264,18 @@ impl HostExecutor for SshHostExecutor {
         args: &HashMap<String, Value>,
         ctx: &ExecutionContext,
     ) -> CapabilityResult {
+        // Checked here as well as by callers: this is the last point before
+        // the values reach `ssh` and the remote shell.
+        if let Err(e) = host.validate().and_then(|_| validate_capability_id(cap_id)) {
+            return CapabilityResult::failure(format!("refusing to run ssh: {e}"), false);
+        }
+
         let args_json = serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string());
         let remote_cmd = format!(
-            "{} agent-exec {} {}",
-            self.remote_binary,
-            cap_id,
+            "{} agent-exec{} {} {}",
+            shell_quote(&self.remote_binary),
+            if self.approved { " --approved" } else { "" },
+            shell_quote(cap_id),
             shell_quote(&args_json)
         );
         let ssh_args = build_ssh_args(host, &remote_cmd);
@@ -390,6 +466,11 @@ mod tests {
         let args = build_ssh_args(&host, "sentinel agent-exec disk_usage '{}'");
         assert!(args.windows(2).any(|w| w == ["-p", "2200"]));
         assert!(args.windows(2).any(|w| w == ["-i", "/keys/id_ed25519"]));
+        assert_eq!(
+            args[args.len() - 3],
+            "--",
+            "options end before the destination"
+        );
         assert_eq!(args[args.len() - 2], "ops@h1");
         assert_eq!(args[args.len() - 1], "sentinel agent-exec disk_usage '{}'");
     }
@@ -451,5 +532,97 @@ mod tests {
         if let CapabilityResult::Failure { error, .. } = &results["bad-host"] {
             assert!(error.contains("unreachable"));
         }
+    }
+
+    // ── Input validation (ssh option / shell injection) ───────────────────────
+
+    #[test]
+    fn hostile_host_specs_are_rejected() {
+        for spec in [
+            "-oProxyCommand=touch /tmp/pwned",
+            "root@-oProxyCommand=id",
+            "-l@host",
+            "host;rm -rf /",
+            "host name",
+            "host$(id)",
+            "ro ot@host",
+            "root@",
+            "",
+        ] {
+            let h = HostConfig::parse(spec);
+            assert!(h.validate().is_err(), "{spec:?} was accepted as {h:?}");
+        }
+        for spec in [
+            "web-01",
+            "deploy@db-02:2222",
+            "ops@10.0.0.5",
+            "root@host.example.com",
+        ] {
+            assert!(HostConfig::parse(spec).validate().is_ok(), "{spec}");
+        }
+        let mut h = HostConfig::new("h", "u");
+        h.key_path = Some("-oProxyCommand=x".into());
+        assert!(h.validate().is_err());
+    }
+
+    #[test]
+    fn hostile_capability_ids_are_rejected() {
+        for id in [
+            "disk_usage; rm -rf /",
+            "$(id)",
+            "a b",
+            "-x",
+            "",
+            "a'b",
+            "a|b",
+        ] {
+            assert!(validate_capability_id(id).is_err(), "{id:?}");
+        }
+        for id in ["disk_usage", "sentinel.fs.read", "log-vacuum"] {
+            assert!(validate_capability_id(id).is_ok(), "{id}");
+        }
+    }
+
+    /// The executor refuses before spawning `ssh`: with these inputs a spawn
+    /// would run a local command through ProxyCommand.
+    #[tokio::test]
+    async fn ssh_executor_refuses_hostile_input_without_spawning() {
+        let exec = SshHostExecutor::default();
+        let ctx = ExecutionContext::new(uuid::Uuid::new_v4(), "fleet");
+        let marker = std::env::temp_dir().join(format!("sentinel-pwned-{}", uuid::Uuid::new_v4()));
+        let evil = HostConfig {
+            hostname: format!("-oProxyCommand=touch {}", marker.display()),
+            user: "root".into(),
+            port: 22,
+            key_path: None,
+        };
+        let r = exec
+            .execute(&evil, "disk_usage", &HashMap::new(), &ctx)
+            .await;
+        assert!(
+            matches!(r, CapabilityResult::Failure { ref error, .. } if error.contains("refusing")),
+            "{r:?}"
+        );
+        assert!(!marker.exists());
+
+        let ok_host = HostConfig::new("localhost", "nobody");
+        let r = exec
+            .execute(&ok_host, "x; touch /tmp/y", &HashMap::new(), &ctx)
+            .await;
+        assert!(
+            matches!(r, CapabilityResult::Failure { ref error, .. } if error.contains("invalid capability id")),
+            "{r:?}"
+        );
+    }
+
+    #[test]
+    fn remote_command_is_fully_quoted() {
+        assert_eq!(shell_quote("it's"), r#"'it'\''s'"#);
+        // A JSON argument containing a quote cannot close the quoting.
+        let quoted = shell_quote(r#"{"path":"/tmp/a'; rm -rf / #"}"#);
+        assert!(quoted.starts_with('\'') && quoted.ends_with('\''));
+        assert!(!quoted[1..quoted.len() - 1]
+            .replace("'\\''", "")
+            .contains('\''));
     }
 }

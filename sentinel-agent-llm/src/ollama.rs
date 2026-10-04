@@ -11,7 +11,9 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-use crate::backend::{LlmBackend, LlmResponse, Message};
+use crate::backend::{
+    LlmBackend, LlmResponse, Message, ToolCall, ToolChoice, ToolResponse, ToolSpec,
+};
 use crate::error::AgentError;
 
 // ── Request / response types ──────────────────────────────────────────────────
@@ -23,6 +25,8 @@ struct OllamaRequest<'a> {
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     options: Option<OllamaOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Serialize)]
@@ -48,7 +52,22 @@ struct OllamaResponse {
 
 #[derive(Deserialize)]
 struct OllamaResponseMessage {
+    #[serde(default)]
     content: String,
+    tool_calls: Option<Vec<OllamaToolCall>>,
+}
+
+#[derive(Deserialize)]
+struct OllamaToolCall {
+    function: OllamaFunctionCall,
+}
+
+#[derive(Deserialize)]
+struct OllamaFunctionCall {
+    name: String,
+    /// Ollama returns arguments as a JSON object, not a string.
+    #[serde(default)]
+    arguments: serde_json::Value,
 }
 
 // ── OllamaBackend ─────────────────────────────────────────────────────────────
@@ -58,6 +77,7 @@ pub struct OllamaBackend {
     client: reqwest::Client,
     model: String,
     base_url: String,
+    native_tools: bool,
 }
 
 impl OllamaBackend {
@@ -78,7 +98,76 @@ impl OllamaBackend {
             client,
             model,
             base_url,
+            // Tool support depends on the model; many local models reject a
+            // request that carries `tools`.  Opt in per backend.
+            native_tools: false,
         }
+    }
+
+    /// Enable native tool use for models that support it.
+    ///
+    /// Ollama has no `tool_choice`, so a call cannot be forced: a model that
+    /// answers in text instead fails the turn (text is never executed).
+    pub fn with_native_tools(mut self, enabled: bool) -> Self {
+        self.native_tools = enabled;
+        self
+    }
+
+    /// POST one chat request and decode the response.
+    async fn send(
+        &self,
+        messages: &[Message],
+        max_tokens: u32,
+        tools: Option<Vec<serde_json::Value>>,
+    ) -> Result<OllamaResponse, AgentError> {
+        let api_messages: Vec<OllamaMessage> = messages
+            .iter()
+            .map(|m| OllamaMessage {
+                role: m.role.as_str(),
+                content: &m.content,
+            })
+            .collect();
+
+        let request_body = OllamaRequest {
+            model: &self.model,
+            messages: api_messages,
+            stream: false,
+            options: Some(OllamaOptions {
+                num_predict: max_tokens,
+            }),
+            tools,
+        };
+
+        debug!(model = %self.model, max_tokens, "sending Ollama completion request");
+
+        let response = self
+            .client
+            .post(self.chat_url())
+            .header("Content-Type", "application/json")
+            .json(&request_body)
+            .send()
+            .await?;
+
+        let status = response.status();
+        let status_u16 = status.as_u16();
+
+        if !status.is_success() {
+            let body_text = crate::http::text_capped(response, crate::http::MAX_ERROR_BYTES).await;
+            warn!(status = status_u16, body = %body_text, "Ollama API error");
+            return Err(AgentError::ApiError {
+                status: status_u16,
+                message: body_text,
+            });
+        }
+
+        let api_response: OllamaResponse =
+            crate::http::json_capped(response, crate::http::MAX_RESPONSE_BYTES).await?;
+
+        if !api_response.done {
+            warn!("Ollama response marked as not done");
+        }
+
+        Ok(api_response)
     }
 
     fn chat_url(&self) -> String {
@@ -105,55 +194,7 @@ impl LlmBackend for OllamaBackend {
         messages: Vec<Message>,
         max_tokens: u32,
     ) -> Result<LlmResponse, AgentError> {
-        let api_messages: Vec<OllamaMessage> = messages
-            .iter()
-            .map(|m| OllamaMessage {
-                role: m.role.as_str(),
-                content: &m.content,
-            })
-            .collect();
-
-        let request_body = OllamaRequest {
-            model: &self.model,
-            messages: api_messages,
-            stream: false,
-            options: Some(OllamaOptions {
-                num_predict: max_tokens,
-            }),
-        };
-
-        debug!(model = %self.model, max_tokens, "sending Ollama completion request");
-
-        let response = self
-            .client
-            .post(self.chat_url())
-            .header("Content-Type", "application/json")
-            .json(&request_body)
-            .send()
-            .await?;
-
-        let status = response.status();
-        let status_u16 = status.as_u16();
-
-        if !status.is_success() {
-            let body_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "<unreadable body>".to_string());
-            warn!(status = status_u16, body = %body_text, "Ollama API error");
-            return Err(AgentError::ApiError {
-                status: status_u16,
-                message: body_text,
-            });
-        }
-
-        let api_response: OllamaResponse = response.json().await.map_err(|e| {
-            AgentError::InvalidResponse(format!("failed to parse Ollama response: {e}"))
-        })?;
-
-        if !api_response.done {
-            warn!("Ollama response marked as not done");
-        }
+        let api_response = self.send(&messages, max_tokens, None).await?;
 
         let content = api_response.message.content;
         if content.is_empty() {
@@ -171,6 +212,59 @@ impl LlmBackend for OllamaBackend {
 
         Ok(LlmResponse {
             content,
+            model: api_response.model,
+            input_tokens: api_response.prompt_eval_count.unwrap_or(0),
+            output_tokens: api_response.eval_count.unwrap_or(0),
+            finish_reason: api_response
+                .done_reason
+                .unwrap_or_else(|| "stop".to_string()),
+        })
+    }
+
+    fn supports_tools(&self) -> bool {
+        self.native_tools
+    }
+
+    async fn complete_with_tools(
+        &self,
+        messages: Vec<Message>,
+        tools: &[ToolSpec],
+        choice: ToolChoice,
+        max_tokens: u32,
+    ) -> Result<ToolResponse, AgentError> {
+        // No `tool_choice` in the Ollama API.  For a named choice, offer
+        // only that tool; the caller rejects a turn without exactly one call.
+        let offered: Vec<serde_json::Value> = tools
+            .iter()
+            .filter(|t| match &choice {
+                ToolChoice::Any => true,
+                ToolChoice::Tool(name) => &t.name == name,
+            })
+            .map(crate::openai::function_tool)
+            .collect();
+
+        let api_response = self.send(&messages, max_tokens, Some(offered)).await?;
+
+        let calls = api_response
+            .message
+            .tool_calls
+            .unwrap_or_default()
+            .into_iter()
+            .map(|c| ToolCall {
+                name: c.function.name,
+                input: c.function.arguments,
+            })
+            .collect::<Vec<_>>();
+
+        debug!(
+            model = %api_response.model,
+            calls = calls.len(),
+            "Ollama tool-call completion received"
+        );
+
+        Ok(ToolResponse {
+            calls,
+            text: api_response.message.content,
             model: api_response.model,
             input_tokens: api_response.prompt_eval_count.unwrap_or(0),
             output_tokens: api_response.eval_count.unwrap_or(0),
@@ -303,5 +397,153 @@ mod tests {
     fn with_base_url_sets_url() {
         let backend = OllamaBackend::with_base_url("llama3.2".into(), "http://remote:11434".into());
         assert_eq!(backend.chat_url(), "http://remote:11434/api/chat");
+    }
+
+    // ── Native tool use ──────────────────────────────────────────────────────
+
+    fn tool(name: &str) -> ToolSpec {
+        ToolSpec {
+            name: name.into(),
+            description: format!("{name} tool"),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        }
+    }
+
+    fn tool_reply(message: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "model": "llama-test", "created_at": "2024-01-01T00:00:00Z",
+            "message": message,
+            "done": true, "done_reason": "stop",
+            "prompt_eval_count": 3, "eval_count": 5
+        })
+    }
+
+    #[test]
+    fn tools_are_opt_in() {
+        assert!(!OllamaBackend::new("m".into()).supports_tools());
+        assert!(OllamaBackend::new("m".into())
+            .with_native_tools(true)
+            .supports_tools());
+    }
+
+    #[tokio::test]
+    async fn tool_call_with_object_arguments_is_parsed() {
+        use wiremock::matchers::body_partial_json;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/chat"))
+            .and(body_partial_json(serde_json::json!({
+                "stream": false,
+                "tools": [{"type": "function", "function": {"name": "disk_usage"}}]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(tool_reply(serde_json::json!({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"function": {"name": "disk_usage", "arguments": {"path": "/var"}}}]
+            }))))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let backend =
+            OllamaBackend::with_base_url("llama-test".into(), server.uri()).with_native_tools(true);
+        let r = backend
+            .complete_with_tools(
+                vec![Message::user("go")],
+                &[tool("disk_usage")],
+                ToolChoice::Any,
+                64,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            r.calls,
+            vec![ToolCall {
+                name: "disk_usage".into(),
+                input: serde_json::json!({"path": "/var"})
+            }]
+        );
+        assert_eq!((r.input_tokens, r.output_tokens), (3, 5));
+    }
+
+    #[tokio::test]
+    async fn named_choice_offers_only_that_tool() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(tool_reply(serde_json::json!({
+                    "role": "assistant", "content": "",
+                    "tool_calls": [{"function": {"name": "propose_plan", "arguments": {}}}]
+                }))),
+            )
+            .mount(&server)
+            .await;
+        let backend =
+            OllamaBackend::with_base_url("llama-test".into(), server.uri()).with_native_tools(true);
+        backend
+            .complete_with_tools(
+                vec![Message::user("go")],
+                &[tool("disk_usage"), tool("propose_plan")],
+                ToolChoice::Tool("propose_plan".into()),
+                64,
+            )
+            .await
+            .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        let offered: Vec<&str> = body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["function"]["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(offered, ["propose_plan"]);
+    }
+
+    #[tokio::test]
+    async fn text_answer_in_tool_mode_yields_no_calls() {
+        // Ollama cannot force a call; a text answer comes back as zero calls
+        // and the reasoning loop rejects the turn.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(make_success_response(
+                    "{\"capability_id\": \"service_stop\"}",
+                    "llama-test",
+                )),
+            )
+            .mount(&server)
+            .await;
+        let backend =
+            OllamaBackend::with_base_url("llama-test".into(), server.uri()).with_native_tools(true);
+        let r = backend
+            .complete_with_tools(
+                vec![Message::user("go")],
+                &[tool("disk_usage")],
+                ToolChoice::Any,
+                64,
+            )
+            .await
+            .unwrap();
+        assert!(r.calls.is_empty());
+        assert!(r.text.contains("service_stop"));
+    }
+
+    #[tokio::test]
+    async fn plain_completion_sends_no_tools() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(make_success_response("hi", "llama-test")),
+            )
+            .mount(&server)
+            .await;
+        OllamaBackend::with_base_url("llama-test".into(), server.uri())
+            .complete(vec![Message::user("go")], 64)
+            .await
+            .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert!(body.get("tools").is_none());
     }
 }

@@ -13,6 +13,7 @@ pub mod network;
 pub mod packages;
 pub mod process;
 pub mod registry;
+pub mod schemas;
 
 pub use registry::CapabilityRegistry;
 

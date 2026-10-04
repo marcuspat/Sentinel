@@ -7,7 +7,7 @@ use sentinel_core::{
     capability::ResourceImpact, Capability, CapabilityKind, CapabilityManifest, CapabilityResult,
     CoreError, ExecutionContext, RiskTier,
 };
-use sentinel_exec::CommandExecutorTrait;
+use sentinel_exec::{CommandExecutorTrait, FsAccess};
 
 // ─── ProcessList ─────────────────────────────────────────────────────────────
 
@@ -40,6 +40,10 @@ impl Capability for ProcessList {
         &self.manifest
     }
 
+    fn args_schema(&self) -> Value {
+        crate::schemas::args_schema(&self.manifest.id).unwrap_or_else(|| json!({"type": "object"}))
+    }
+
     fn validate_args(&self, args: &Value) -> Result<(), CoreError> {
         if let Some(f) = args.get("filter") {
             if !f.is_string() {
@@ -56,11 +60,12 @@ impl Capability for ProcessList {
 
         let ps_out = match self
             .executor
-            .run(
+            .run_confined(
                 "ps",
                 &["aux"],
                 &ctx.env_overrides,
                 ctx.resource_limits.max_output_bytes,
+                &FsAccess::ReadOnly,
             )
             .await
         {
@@ -148,6 +153,10 @@ impl Capability for ProcessKill {
         &self.manifest
     }
 
+    fn args_schema(&self) -> Value {
+        crate::schemas::args_schema(&self.manifest.id).unwrap_or_else(|| json!({"type": "object"}))
+    }
+
     fn validate_args(&self, args: &Value) -> Result<(), CoreError> {
         let pid = args
             .get("pid")
@@ -190,11 +199,12 @@ impl Capability for ProcessKill {
         debug!("ProcessKill: sending {} to pid {}", signal, pid);
         match self
             .executor
-            .run(
+            .run_confined(
                 "kill",
                 &[sig_flag.as_str(), pid_str.as_str()],
                 &ctx.env_overrides,
                 ctx.resource_limits.max_output_bytes,
+                &FsAccess::ReadOnly,
             )
             .await
         {
@@ -252,6 +262,10 @@ impl Capability for ServiceStatus {
         &self.manifest
     }
 
+    fn args_schema(&self) -> Value {
+        crate::schemas::args_schema(&self.manifest.id).unwrap_or_else(|| json!({"type": "object"}))
+    }
+
     fn validate_args(&self, args: &Value) -> Result<(), CoreError> {
         args.get("service")
             .and_then(Value::as_str)
@@ -268,11 +282,12 @@ impl Capability for ServiceStatus {
 
         let out = match self
             .executor
-            .run(
+            .run_confined(
                 "systemctl",
                 &["status", service],
                 &ctx.env_overrides,
                 ctx.resource_limits.max_output_bytes,
+                &FsAccess::ReadOnly,
             )
             .await
         {
@@ -336,6 +351,10 @@ impl Capability for ServiceRestart {
         &self.manifest
     }
 
+    fn args_schema(&self) -> Value {
+        crate::schemas::args_schema(&self.manifest.id).unwrap_or_else(|| json!({"type": "object"}))
+    }
+
     fn validate_args(&self, args: &Value) -> Result<(), CoreError> {
         args.get("service")
             .and_then(Value::as_str)
@@ -352,11 +371,12 @@ impl Capability for ServiceRestart {
 
         let pre_state = match self
             .executor
-            .run(
+            .run_confined(
                 "systemctl",
                 &["is-active", service],
                 &ctx.env_overrides,
                 4096,
+                &FsAccess::service_control(),
             )
             .await
         {
@@ -366,11 +386,12 @@ impl Capability for ServiceRestart {
 
         match self
             .executor
-            .run(
+            .run_confined(
                 "systemctl",
                 &["restart", service],
                 &ctx.env_overrides,
                 ctx.resource_limits.max_output_bytes,
+                &FsAccess::service_control(),
             )
             .await
         {
@@ -410,11 +431,12 @@ impl Capability for ServiceRestart {
 
         match self
             .executor
-            .run(
+            .run_confined(
                 "systemctl",
                 &["stop", service],
                 &ctx.env_overrides,
                 ctx.resource_limits.max_output_bytes,
+                &FsAccess::service_control(),
             )
             .await
         {
@@ -463,6 +485,10 @@ impl Capability for ServiceStop {
         &self.manifest
     }
 
+    fn args_schema(&self) -> Value {
+        crate::schemas::args_schema(&self.manifest.id).unwrap_or_else(|| json!({"type": "object"}))
+    }
+
     fn validate_args(&self, args: &Value) -> Result<(), CoreError> {
         args.get("service")
             .and_then(Value::as_str)
@@ -479,11 +505,12 @@ impl Capability for ServiceStop {
 
         match self
             .executor
-            .run(
+            .run_confined(
                 "systemctl",
                 &["stop", service],
                 &ctx.env_overrides,
                 ctx.resource_limits.max_output_bytes,
+                &FsAccess::service_control(),
             )
             .await
         {
@@ -547,6 +574,10 @@ impl Capability for ServiceStart {
         &self.manifest
     }
 
+    fn args_schema(&self) -> Value {
+        crate::schemas::args_schema(&self.manifest.id).unwrap_or_else(|| json!({"type": "object"}))
+    }
+
     fn validate_args(&self, args: &Value) -> Result<(), CoreError> {
         args.get("service")
             .and_then(Value::as_str)
@@ -563,11 +594,12 @@ impl Capability for ServiceStart {
 
         let out = match self
             .executor
-            .run(
+            .run_confined(
                 "systemctl",
                 &["start", service],
                 &ctx.env_overrides,
                 ctx.resource_limits.max_output_bytes,
+                &FsAccess::service_control(),
             )
             .await
         {
@@ -584,11 +616,12 @@ impl Capability for ServiceStart {
 
         let status = match self
             .executor
-            .run(
+            .run_confined(
                 "systemctl",
                 &["is-active", service],
                 &ctx.env_overrides,
                 4096,
+                &FsAccess::service_control(),
             )
             .await
         {

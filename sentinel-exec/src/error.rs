@@ -24,4 +24,8 @@ pub enum ExecError {
     /// A Unix signal operation (SIGTERM/SIGKILL) failed.
     #[error("Signal error: {0}")]
     Signal(String),
+
+    /// A sandbox restriction was required but the kernel cannot enforce it.
+    #[error("Sandbox cannot be enforced: {0}")]
+    SandboxUnavailable(String),
 }

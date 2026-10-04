@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use chrono::Utc;
 use tokio::io::AsyncWriteExt;
@@ -8,6 +9,7 @@ use uuid::Uuid;
 use crate::{
     error::AuditError,
     events::{AuditEvent, AuditEventType},
+    signing::{sidecar_path, AuditSigner, Checkpoint},
     verifier::AuditVerifier,
 };
 
@@ -31,6 +33,8 @@ pub struct AuditLog {
     next_sequence: u64,
     last_hash: String,
     file_path: Option<PathBuf>,
+    signer: Option<Arc<AuditSigner>>,
+    last_checkpoint: Option<Checkpoint>,
 }
 
 impl AuditLog {
@@ -48,7 +52,39 @@ impl AuditLog {
             next_sequence: 0,
             last_hash: Self::GENESIS_HASH.to_string(),
             file_path,
+            signer: None,
+            last_checkpoint: None,
         }
+    }
+
+    /// Sign the chain head after every append (ADR-015).
+    ///
+    /// With a file-backed log each checkpoint is appended to the sidecar
+    /// `<file>.sig`; in-memory logs keep only the latest checkpoint, readable
+    /// through [`AuditLog::last_checkpoint`].
+    pub fn with_signer(mut self, signer: Arc<AuditSigner>) -> Self {
+        self.signer = Some(signer);
+        self
+    }
+
+    /// Attach the signer named by `$SENTINEL_AUDIT_KEY`, if any.  A key that
+    /// is configured but unusable is an error rather than a silent fall back
+    /// to unsigned logging.
+    pub fn with_signer_from_env(self) -> Result<Self, AuditError> {
+        Ok(match AuditSigner::from_env()? {
+            Some(signer) => self.with_signer(Arc::new(signer)),
+            None => self,
+        })
+    }
+
+    /// Whether appends are being signed.
+    pub fn is_signed(&self) -> bool {
+        self.signer.is_some()
+    }
+
+    /// The most recent signed checkpoint, if a signer is attached.
+    pub fn last_checkpoint(&self) -> Option<&Checkpoint> {
+        self.last_checkpoint.as_ref()
     }
 
     /// Append an event, computing its hash automatically.
@@ -97,6 +133,38 @@ impl AuditLog {
         self.last_hash = this_hash;
         self.next_sequence += 1;
         self.events.push(event);
+
+        // Metrics come from the audit stream itself (ADR-021), for
+        // file-backed logs only: in-memory logs are tests and scratch chains.
+        if self.file_path.is_some() {
+            let metrics = crate::metrics::global();
+            if let Some(ev) = self.events.last() {
+                metrics.metrics().observe(&ev.event_type);
+            }
+            metrics.flush();
+        }
+
+        // Sign the new head.  CONTRACT (gate r1): the event is ALREADY durable
+        // when this block runs — a sidecar failure surfaces as Err with the
+        // event nonetheless in the chain. Callers must read this error as
+        // "recorded but unsigned", never "not recorded": aborting is correct
+        // (no further event should outpace the missing checkpoint), and
+        // verify-audit detects the unsigned tail rather than trusting it.
+        if let Some(signer) = self.signer.clone() {
+            let checkpoint = signer.sign(self.session_id, self.next_sequence, &self.last_hash);
+            if let Some(ref path) = self.file_path {
+                let mut line = serde_json::to_string(&checkpoint)?;
+                line.push('\n');
+                let mut file = tokio::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(sidecar_path(path))
+                    .await?;
+                file.write_all(line.as_bytes()).await?;
+                file.flush().await?;
+            }
+            self.last_checkpoint = Some(checkpoint);
+        }
 
         Ok(self.events.last().unwrap())
     }
@@ -358,6 +426,43 @@ mod tests {
         for line in &lines {
             serde_json::from_str::<AuditEvent>(line).expect("each line is valid JSON");
         }
+    }
+
+    #[tokio::test]
+    async fn signed_log_writes_one_checkpoint_per_event() {
+        use crate::signing::{parse_checkpoints, verify_checkpoints};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let signer = Arc::new(AuditSigner::generate().unwrap());
+
+        let mut log = AuditLog::new(Uuid::new_v4(), Some(path.clone())).with_signer(signer.clone());
+        assert!(log.is_signed());
+        for _ in 0..3 {
+            log.append(AuditEventType::InvestigationStarted)
+                .await
+                .unwrap();
+        }
+        assert_eq!(log.last_checkpoint().unwrap().event_count, 3);
+
+        let sidecar = std::fs::read_to_string(sidecar_path(&path)).unwrap();
+        let cps = parse_checkpoints(&sidecar).unwrap();
+        assert_eq!(cps.len(), 3);
+        let r = verify_checkpoints(log.events(), &cps, &signer.verifying_key());
+        assert!(r.fully_signed(), "{r:?}");
+    }
+
+    #[tokio::test]
+    async fn unsigned_log_writes_no_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let mut log = AuditLog::new(Uuid::new_v4(), Some(path.clone()));
+        log.append(AuditEventType::InvestigationStarted)
+            .await
+            .unwrap();
+        assert!(!log.is_signed());
+        assert!(log.last_checkpoint().is_none());
+        assert!(!sidecar_path(&path).exists());
     }
 
     #[tokio::test]

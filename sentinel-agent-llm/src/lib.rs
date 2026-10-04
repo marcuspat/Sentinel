@@ -20,15 +20,20 @@
 pub mod anthropic;
 pub mod backend;
 pub mod error;
+mod http;
 pub mod ollama;
 pub mod openai;
 pub mod planner;
 pub mod prompt_builder;
 pub mod reasoning_loop;
+pub mod resilient;
+pub mod tools;
 pub mod untrusted;
 
 pub use anthropic::AnthropicBackend;
-pub use backend::{LlmBackend, LlmResponse, Message, MessageRole};
+pub use backend::{
+    LlmBackend, LlmResponse, Message, MessageRole, ToolCall, ToolChoice, ToolResponse, ToolSpec,
+};
 pub use error::AgentError;
 pub use ollama::OllamaBackend;
 pub use openai::OpenAiBackend;
@@ -38,3 +43,4 @@ pub use planner::{
 };
 pub use prompt_builder::PromptBuilder;
 pub use reasoning_loop::{ExecutionSummary, ReasoningConfig, ReasoningLoop};
+pub use resilient::{Budget, ResilientBackend, RetryPolicy, Usage};

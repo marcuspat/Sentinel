@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 009cbd5fe8207dafe1c3470569ef9d926bc4610ac8afe90b8a101be95bbceb4d # shrinks to calls = [Object {"id": Number(0), "jsonrpc": String("2.0"), "method": String("tools/call"), "params": Object {"arguments": Object {"args": Number(-2.2825169095899815e-18), "capability_id": String("disk_usage"), "goal": String("fuzz"), "plan_id": String(""), "steps": Array [Object {"args": Number(-2.2825169095899815e-18), "capability_id": String("disk_usage"), "description": String("x")}]}, "name": String("sentinel_capabilities")}}]

@@ -1,6 +1,6 @@
 # ADR-013: MCP Policy Gate for Coding Agents
 
-**Status:** Proposed  
+**Status:** Accepted — implemented; plan-store locking added in 0.2.0  
 **Date:** 2026-09-25  
 **Deciders:** Marcus Patman  
 **Categories:** Architecture, Safety, Human-in-the-Loop, Integration
@@ -90,3 +90,44 @@ Operator identity in approvals is `$USER`/`$LOGNAME` and is not authenticated.
 - **Expose approve as an MCP tool gated by a secret.** Rejected: the secret would sit in the agent's environment or config.
 - **HTTP/SSE transport.** Deferred: it adds a network listener and auth surface, and stdio covers local coding agents.
 - **One shared audit file across processes.** Rejected for now: concurrent appenders would interleave and break the linear chain. Per-process chains plus cross-references in the plan record are simpler and verifiable today.
+
+## Amendment (2026-10-01): plan-store locking
+
+The store was documented as "not a lock manager", with concurrent operators
+guarded only by a read-then-write status check. That check does not hold: two
+`sentinel execute` processes started together both read `Approved`, both wrote
+`Executing`, and both ran the plan. A 16-way race test reproduces it every
+time with the lock removed.
+
+- Every status transition (`approve`, `reject`, claim for execution) is now
+  load-modify-save under an exclusive `flock` on `.<plan_id>.lock`. The lock is
+  on a separate file because the plan document is replaced by `rename`, which
+  would drop a lock held on the old inode. `flock` is released by the kernel if
+  the holder dies, so there is no stale-lock cleanup.
+- `PlanStore::claim_for_execution` performs `Approved -> Executing`, including
+  the integrity check, as one step. Exactly one caller wins; the others are
+  refused with the same audited "not approved" error as before.
+- Writes are `fsync`ed before and after the rename.
+
+Still open: a process killed while a plan is `Executing` leaves it in that
+state permanently. Nothing re-runs it (the safe direction), but an operator has
+no command to mark it failed. `flock` is advisory and local; a state directory
+on NFS without lock support is not protected.
+
+## Amendment (2026-10-01): approval in the TUI
+
+"TUI approval of stored plans is specified but not yet built" no longer holds.
+The TUI has a Gate tab that lists stored plans and can approve or reject them.
+
+- Approve and reject run through `sentinel_mcp::operator::{approve_plan,
+  reject_plan}`, which `sentinel approve` / `reject` now call too. One
+  implementation: same checks (must be `PendingApproval`, content hash must
+  still match), same audit-before-transition order, same locked transition.
+- Approval asks for the first eight characters of the plan id, as the CLI does.
+  Rejection asks for `y`.
+- The audit event records the surface: `operator_cli:…` or `operator_tui:…`.
+- The MCP server still has no path to these functions through any tool.
+
+The threat model is unchanged: this is a speed bump for a human, not a
+boundary against a same-UID process. Opening the tab only reads; it never
+creates the state directory.

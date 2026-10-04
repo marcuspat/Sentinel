@@ -11,7 +11,9 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-use crate::backend::{LlmBackend, LlmResponse, Message};
+use crate::backend::{
+    LlmBackend, LlmResponse, Message, ToolCall, ToolChoice, ToolResponse, ToolSpec,
+};
 use crate::error::AgentError;
 
 // ── Request / response types ──────────────────────────────────────────────────
@@ -21,6 +23,12 @@ struct OpenAiRequest<'a> {
     model: &'a str,
     max_tokens: u32,
     messages: Vec<OpenAiMessage<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parallel_tool_calls: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -45,6 +53,32 @@ struct OpenAiChoice {
 #[derive(Deserialize)]
 struct OpenAiChoiceMessage {
     content: Option<String>,
+    tool_calls: Option<Vec<OpenAiToolCall>>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiToolCall {
+    function: OpenAiFunctionCall,
+}
+
+#[derive(Deserialize)]
+struct OpenAiFunctionCall {
+    name: String,
+    /// A JSON document encoded as a string.
+    arguments: String,
+}
+
+/// The OpenAI function-calling shape for a [`ToolSpec`].  Ollama accepts the
+/// same shape.
+pub(crate) fn function_tool(spec: &ToolSpec) -> serde_json::Value {
+    serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": spec.name,
+            "description": spec.description,
+            "parameters": spec.input_schema,
+        }
+    })
 }
 
 #[derive(Deserialize)]
@@ -72,6 +106,7 @@ pub struct OpenAiBackend {
     api_key: String,
     model: String,
     base_url: String,
+    native_tools: bool,
 }
 
 impl OpenAiBackend {
@@ -88,37 +123,36 @@ impl OpenAiBackend {
             .build()
             .expect("failed to build reqwest client");
 
+        // Function calling is a given on api.openai.com.  "OpenAI-compatible"
+        // local servers vary, so they stay on the text protocol unless the
+        // caller opts in with `with_native_tools(true)`.
+        let native_tools = base_url.trim_end_matches('/') == "https://api.openai.com";
+
         Self {
             client,
             api_key,
             model,
             base_url,
+            native_tools,
         }
     }
 
-    fn completions_url(&self) -> String {
-        format!(
-            "{}/v1/chat/completions",
-            self.base_url.trim_end_matches('/')
-        )
-    }
-}
-
-#[async_trait]
-impl LlmBackend for OpenAiBackend {
-    fn name(&self) -> &str {
-        "openai"
+    /// Force native tool use on or off (see [`LlmBackend::supports_tools`]).
+    pub fn with_native_tools(mut self, enabled: bool) -> Self {
+        self.native_tools = enabled;
+        self
     }
 
-    fn model(&self) -> &str {
-        &self.model
-    }
-
-    async fn complete(
+    /// POST one Chat Completions request and decode the response.
+    async fn send(
         &self,
-        messages: Vec<Message>,
+        messages: &[Message],
         max_tokens: u32,
-    ) -> Result<LlmResponse, AgentError> {
+        tools: Option<Vec<serde_json::Value>>,
+        tool_choice: Option<serde_json::Value>,
+    ) -> Result<OpenAiResponse, AgentError> {
+        // One call per turn: the loop policy-checks and audits each one.
+        let parallel_tool_calls = tools.as_ref().map(|_| false);
         let api_messages: Vec<OpenAiMessage> = messages
             .iter()
             .map(|m| OpenAiMessage {
@@ -131,6 +165,9 @@ impl LlmBackend for OpenAiBackend {
             model: &self.model,
             max_tokens,
             messages: api_messages,
+            tools,
+            tool_choice,
+            parallel_tool_calls,
         };
 
         debug!(model = %self.model, max_tokens, "sending OpenAI completion request");
@@ -161,10 +198,7 @@ impl LlmBackend for OpenAiBackend {
         }
 
         if !status.is_success() {
-            let body_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "<unreadable body>".to_string());
+            let body_text = crate::http::text_capped(response, crate::http::MAX_ERROR_BYTES).await;
             let message = serde_json::from_str::<OpenAiErrorBody>(&body_text)
                 .map(|e| e.error.message)
                 .unwrap_or(body_text);
@@ -175,10 +209,33 @@ impl LlmBackend for OpenAiBackend {
             });
         }
 
-        let api_response: OpenAiResponse = response
-            .json()
-            .await
-            .map_err(|e| AgentError::InvalidResponse(format!("failed to parse response: {e}")))?;
+        crate::http::json_capped(response, crate::http::MAX_RESPONSE_BYTES).await
+    }
+
+    fn completions_url(&self) -> String {
+        format!(
+            "{}/v1/chat/completions",
+            self.base_url.trim_end_matches('/')
+        )
+    }
+}
+
+#[async_trait]
+impl LlmBackend for OpenAiBackend {
+    fn name(&self) -> &str {
+        "openai"
+    }
+
+    fn model(&self) -> &str {
+        &self.model
+    }
+
+    async fn complete(
+        &self,
+        messages: Vec<Message>,
+        max_tokens: u32,
+    ) -> Result<LlmResponse, AgentError> {
+        let api_response = self.send(&messages, max_tokens, None, None).await?;
 
         let choice = api_response.choices.into_iter().next().ok_or_else(|| {
             AgentError::InvalidResponse("OpenAI response had no choices".to_string())
@@ -203,6 +260,68 @@ impl LlmBackend for OpenAiBackend {
 
         Ok(LlmResponse {
             content,
+            model: api_response.model,
+            input_tokens: api_response.usage.prompt_tokens,
+            output_tokens: api_response.usage.completion_tokens,
+            finish_reason: choice.finish_reason.unwrap_or_else(|| "stop".to_string()),
+        })
+    }
+
+    fn supports_tools(&self) -> bool {
+        self.native_tools
+    }
+
+    async fn complete_with_tools(
+        &self,
+        messages: Vec<Message>,
+        tools: &[ToolSpec],
+        choice: ToolChoice,
+        max_tokens: u32,
+    ) -> Result<ToolResponse, AgentError> {
+        let tool_choice = match choice {
+            ToolChoice::Any => serde_json::json!("required"),
+            ToolChoice::Tool(name) => {
+                serde_json::json!({"type": "function", "function": {"name": name}})
+            }
+        };
+        let api_response = self
+            .send(
+                &messages,
+                max_tokens,
+                Some(tools.iter().map(function_tool).collect()),
+                Some(tool_choice),
+            )
+            .await?;
+
+        let choice = api_response.choices.into_iter().next().ok_or_else(|| {
+            AgentError::InvalidResponse("OpenAI response had no choices".to_string())
+        })?;
+
+        let mut calls = Vec::new();
+        for call in choice.message.tool_calls.unwrap_or_default() {
+            // `arguments` is model-written JSON in a string; a malformed
+            // document is a failed turn, not an empty argument object.
+            let input = serde_json::from_str(&call.function.arguments).map_err(|e| {
+                AgentError::InvalidResponse(format!(
+                    "tool '{}' arguments are not valid JSON: {e}",
+                    call.function.name
+                ))
+            })?;
+            calls.push(ToolCall {
+                name: call.function.name,
+                input,
+            });
+        }
+
+        debug!(
+            model = %api_response.model,
+            calls = calls.len(),
+            "OpenAI tool-call completion received"
+        );
+
+        Ok(ToolResponse {
+            calls,
+            text: choice.message.content.unwrap_or_default(),
             model: api_response.model,
             input_tokens: api_response.usage.prompt_tokens,
             output_tokens: api_response.usage.completion_tokens,
@@ -365,5 +484,196 @@ mod tests {
         // System messages for OpenAI are passed inline in the messages array.
         let msg = Message::system("system prompt");
         assert_eq!(msg.role.as_str(), "system");
+    }
+
+    // ── Native tool use ──────────────────────────────────────────────────────
+
+    fn disk_tool() -> ToolSpec {
+        ToolSpec {
+            name: "disk_usage".into(),
+            description: "Report disk usage".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"]
+            }),
+        }
+    }
+
+    fn tool_reply(tool_calls: serde_json::Value, content: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "id": "chatcmpl-1", "object": "chat.completion", "model": "gpt-test",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": content, "tool_calls": tool_calls},
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {"prompt_tokens": 9, "completion_tokens": 4, "total_tokens": 13}
+        })
+    }
+
+    fn tool_backend(server: &MockServer) -> OpenAiBackend {
+        OpenAiBackend::with_base_url("k".into(), "gpt-test".into(), server.uri())
+            .with_native_tools(true)
+    }
+
+    #[test]
+    fn tools_default_on_for_openai_and_off_for_compatible_servers() {
+        assert!(OpenAiBackend::new("k".into(), "m".into()).supports_tools());
+        let local =
+            OpenAiBackend::with_base_url("k".into(), "m".into(), "http://localhost:1234".into());
+        assert!(!local.supports_tools(), "compatible servers must opt in");
+        assert!(local.with_native_tools(true).supports_tools());
+    }
+
+    #[tokio::test]
+    async fn tool_request_uses_function_calling_and_forbids_parallel_calls() {
+        use wiremock::matchers::body_partial_json;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .and(body_partial_json(serde_json::json!({
+                "tools": [{
+                    "type": "function",
+                    "function": {
+                        "name": "disk_usage",
+                        "description": "Report disk usage",
+                        "parameters": {"type": "object", "required": ["path"]}
+                    }
+                }],
+                "tool_choice": "required",
+                "parallel_tool_calls": false
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(tool_reply(
+                serde_json::json!([{
+                    "id": "call_1", "type": "function",
+                    "function": {"name": "disk_usage", "arguments": "{\"path\": \"/var\"}"}
+                }]),
+                serde_json::Value::Null,
+            )))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let r = tool_backend(&server)
+            .complete_with_tools(
+                vec![Message::system("sys"), Message::user("go")],
+                &[disk_tool()],
+                ToolChoice::Any,
+                128,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            r.calls,
+            vec![ToolCall {
+                name: "disk_usage".into(),
+                input: serde_json::json!({"path": "/var"})
+            }]
+        );
+        assert_eq!(r.text, "", "null content is not an error in tool mode");
+        assert_eq!((r.input_tokens, r.output_tokens), (9, 4));
+    }
+
+    #[tokio::test]
+    async fn named_tool_choice_is_sent_as_a_function_reference() {
+        use wiremock::matchers::body_partial_json;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_partial_json(serde_json::json!({
+                "tool_choice": {"type": "function", "function": {"name": "disk_usage"}}
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(tool_reply(
+                serde_json::json!([{
+                    "id": "c", "type": "function",
+                    "function": {"name": "disk_usage", "arguments": "{}"}
+                }]),
+                serde_json::Value::Null,
+            )))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let r = tool_backend(&server)
+            .complete_with_tools(
+                vec![Message::user("go")],
+                &[disk_tool()],
+                ToolChoice::Tool("disk_usage".into()),
+                64,
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.calls.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn malformed_arguments_fail_the_turn() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(tool_reply(
+                serde_json::json!([{
+                    "id": "c", "type": "function",
+                    "function": {"name": "disk_usage", "arguments": "{\"path\": "}
+                }]),
+                serde_json::Value::Null,
+            )))
+            .mount(&server)
+            .await;
+        let err = tool_backend(&server)
+            .complete_with_tools(
+                vec![Message::user("go")],
+                &[disk_tool()],
+                ToolChoice::Any,
+                64,
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not valid JSON"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn text_only_answer_yields_no_calls() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(tool_reply(
+                serde_json::Value::Null,
+                serde_json::json!("{\"capability_id\": \"service_stop\"}"),
+            )))
+            .mount(&server)
+            .await;
+        let r = tool_backend(&server)
+            .complete_with_tools(
+                vec![Message::user("go")],
+                &[disk_tool()],
+                ToolChoice::Any,
+                64,
+            )
+            .await
+            .unwrap();
+        assert!(r.calls.is_empty());
+        assert!(r.text.contains("service_stop"));
+    }
+
+    #[tokio::test]
+    async fn plain_completion_sends_no_tool_fields() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(tool_reply(
+                serde_json::Value::Null,
+                serde_json::json!("hello"),
+            )))
+            .mount(&server)
+            .await;
+        tool_backend(&server)
+            .complete(vec![Message::user("go")], 64)
+            .await
+            .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        for field in ["tools", "tool_choice", "parallel_tool_calls"] {
+            assert!(
+                body.get(field).is_none(),
+                "{field} leaked into a text request"
+            );
+        }
     }
 }

@@ -1,0 +1,49 @@
+# cargo-deny configuration — `cargo deny check` runs in CI on every push.
+# See docs/SUPPLY_CHAIN.md for what each section is for and how to respond
+# when it fails.
+
+[graph]
+# The targets Sentinel ships binaries for (see .github/workflows/release.yml).
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+]
+all-features = true
+
+[advisories]
+version = 2
+# Same database `cargo audit` reads (github.com/rustsec/advisory-db).
+yanked = "deny"
+# Every entry needs a reason and should be removed when the fix lands.
+ignore = []
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+# Permissive licences only: Sentinel is MIT and ships as a single static
+# binary, so anything copyleft in the tree would change what users receive.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    # Mozilla's CA bundle (webpki-roots): data, permissive.
+    "CDLA-Permissive-2.0",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+# crates.io only: no git dependencies, no alternative registries.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

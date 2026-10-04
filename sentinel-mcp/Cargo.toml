@@ -11,6 +11,8 @@ description = "MCP (Model Context Protocol) policy gate for Sentinel: lets codin
 sentinel-core = { workspace = true }
 sentinel-policy = { workspace = true }
 sentinel-audit = { workspace = true }
+sentinel-runner = { workspace = true }
+async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -20,9 +22,10 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+libc = { workspace = true }
 
 [dev-dependencies]
-async-trait = { workspace = true }
+proptest = { workspace = true }
 sentinel-capabilities = { workspace = true }
 sentinel-exec = { workspace = true }
 tempfile = { workspace = true }

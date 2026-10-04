@@ -14,23 +14,24 @@ use tokio::sync::{mpsc, Mutex};
 use tracing_subscriber::{fmt, EnvFilter};
 
 use sentinel_agent_llm::{
-    AnthropicBackend, CapabilityRegistry, LlmBackend, OpenAiBackend, ReasoningConfig, ReasoningLoop,
+    AnthropicBackend, Budget, CapabilityRegistry, LlmBackend, OpenAiBackend, ReasoningConfig,
+    ReasoningLoop, ResilientBackend, RetryPolicy,
 };
 use sentinel_audit::AuditLog;
 use sentinel_capabilities::all_capabilities;
-use sentinel_core::{ApprovalDecision, CapabilityResult, ExecutionContext};
-use sentinel_exec::RealCommandExecutor;
-use sentinel_fleet::{execute_on_fleet, FleetConfig};
-use sentinel_policy::{default_policy, RuleCondition};
+use sentinel_core::ApprovalDecision;
+use sentinel_exec::HardenedExecutor;
+use sentinel_policy::RuleCondition;
 use uuid::Uuid;
 
 use sentinel_tui::{
     agent_bridge::{run_agent_session, AgentConfig},
     app::App,
     event_handler::{handle_events, AppEvent},
-    ui,
+    policy_source, ui,
 };
 
+mod fleet_cmd;
 mod gate_cmd;
 
 #[derive(Parser)]
@@ -50,6 +51,15 @@ struct Cli {
     /// OpenAI API key (can also be set via OPENAI_API_KEY env var)
     #[arg(long, env = "OPENAI_API_KEY", global = true)]
     openai_api_key: Option<String>,
+
+    /// Policy file (TOML).  Its rules tighten the built-in policy; see
+    /// `sentinel policy` for the result
+    #[arg(long, env = "SENTINEL_POLICY", global = true)]
+    policy: Option<std::path::PathBuf>,
+
+    /// Do not undo completed steps when a later step of a plan fails
+    #[arg(long, env = "SENTINEL_NO_ROLLBACK", global = true)]
+    no_rollback: bool,
 
     /// LLM backend to use
     #[arg(long, default_value = "anthropic", global = true)]
@@ -85,8 +95,23 @@ enum Commands {
     Capabilities,
     /// Show current policy rules
     Policy,
-    /// Verify an audit log file
-    VerifyAudit { path: std::path::PathBuf },
+    /// Verify an audit log file (hash chain, and signatures when --pubkey is given)
+    VerifyAudit {
+        path: std::path::PathBuf,
+        /// Trusted Ed25519 public key: 64 hex chars, or a file containing them.
+        /// Checks the signed checkpoints in `<PATH>.sig` against this key
+        #[arg(long, env = "SENTINEL_AUDIT_PUBKEY")]
+        pubkey: Option<String>,
+        /// Fail unless every event is covered by a valid signature (needs --pubkey)
+        #[arg(long, requires = "pubkey")]
+        require_signature: bool,
+    },
+    /// Generate an Ed25519 audit-signing key (mode 0600) and print its public key
+    AuditKeygen {
+        /// Where to write the private key; refuses to overwrite
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
     /// Run a capability across multiple hosts in parallel over SSH
     Fleet {
         /// Operational goal / label for this fleet run
@@ -101,6 +126,23 @@ enum Commands {
         /// JSON arguments object for the capability
         #[arg(long, default_value = "{}")]
         args: String,
+        /// Approve a run that policy marks as requiring operator approval
+        #[arg(long)]
+        approve: bool,
+    },
+    /// Host side of `sentinel fleet`: run one capability under this host's
+    /// policy and print its result as JSON.  Invoked over SSH
+    #[command(hide = true)]
+    AgentExec {
+        capability: String,
+        /// JSON arguments object
+        #[arg(default_value = "{}")]
+        args: String,
+        /// The operator approved this run on the controller
+        #[arg(long)]
+        approved: bool,
+        #[arg(long, env = "SENTINEL_STATE_DIR")]
+        state_dir: Option<std::path::PathBuf>,
     },
     /// Launch the interactive TUI
     Tui {
@@ -163,6 +205,8 @@ enum Commands {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    policy_source::set_path(cli.policy.clone());
+    sentinel_tui::runtime_opts::set_no_rollback(cli.no_rollback);
 
     // Logs always go to stderr: stdout is reserved for command output and,
     // under `serve --mcp`, for the JSON-RPC stream.
@@ -206,14 +250,26 @@ async fn main() -> Result<()> {
             state_dir,
             step_timeout_ms,
         } => gate_cmd::execute(plan_id, state_dir, step_timeout_ms).await?,
-        Commands::Policy => show_policy(),
-        Commands::VerifyAudit { path } => verify_audit(&path)?,
+        Commands::Policy => show_policy()?,
+        Commands::VerifyAudit {
+            path,
+            pubkey,
+            require_signature,
+        } => verify_audit(&path, pubkey.as_deref(), require_signature)?,
+        Commands::AuditKeygen { out } => audit_keygen(&out)?,
         Commands::Fleet {
             goal,
             hosts,
             capability,
             args,
-        } => run_fleet(goal, hosts, capability, args).await?,
+            approve,
+        } => fleet_cmd::run_fleet(goal, hosts, capability, args, approve).await?,
+        Commands::AgentExec {
+            capability,
+            args,
+            approved,
+            state_dir,
+        } => fleet_cmd::agent_exec(capability, args, approved, state_dir).await?,
         Commands::Run {
             goal,
             host,
@@ -375,8 +431,16 @@ async fn run_agent(
         }
     };
 
+    // Retries with backoff, a per-request deadline and a hard session budget
+    // (ADR-020).  Limits come from SENTINEL_MAX_LLM_CALLS / _TOKENS.
+    let backend: Box<dyn LlmBackend> = Box::new(ResilientBackend::with(
+        backend,
+        RetryPolicy::default(),
+        Budget::from_env(),
+    ));
+
     // 2. Executor + real capability implementations.
-    let executor = Arc::new(RealCommandExecutor);
+    let executor = Arc::new(HardenedExecutor::for_builtin_capabilities());
     let caps = all_capabilities(executor);
 
     // 3. Registry of capability manifests (for prompt/planning).
@@ -387,12 +451,11 @@ async fn run_agent(
     let registry = Arc::new(registry);
 
     // 4. Policy + audit log (persisted to a per-session JSONL file).
-    let policy = Arc::new(default_policy());
+    let policy = Arc::new(policy_source::load()?);
     let audit_path = std::path::PathBuf::from(format!("sentinel-audit-{session_id}.jsonl"));
-    let audit = Arc::new(Mutex::new(AuditLog::new(
-        session_id,
-        Some(audit_path.clone()),
-    )));
+    let audit = Arc::new(Mutex::new(
+        AuditLog::new(session_id, Some(audit_path.clone())).with_signer_from_env()?,
+    ));
 
     // 5. Reasoning loop wired with the concrete capabilities.
     let agent = ReasoningLoop::new(
@@ -400,7 +463,10 @@ async fn run_agent(
         registry,
         policy,
         Arc::clone(&audit),
-        ReasoningConfig::default(),
+        ReasoningConfig {
+            rollback_on_failure: sentinel_tui::runtime_opts::rollback_enabled(),
+            ..ReasoningConfig::default()
+        },
     )
     .with_capabilities(caps);
 
@@ -479,73 +545,8 @@ async fn run_agent(
     Ok(())
 }
 
-/// Run a capability across multiple hosts in parallel over SSH and print
-/// per-host results.
-async fn run_fleet(
-    goal: String,
-    hosts: Vec<String>,
-    capability: String,
-    args: String,
-) -> Result<()> {
-    if hosts.is_empty() {
-        return Err(anyhow::anyhow!(
-            "no hosts specified; pass --hosts host1,host2[,...]"
-        ));
-    }
-
-    let parsed_args: std::collections::HashMap<String, serde_json::Value> =
-        serde_json::from_str(&args)
-            .map_err(|e| anyhow::anyhow!("--args must be a JSON object: {e}"))?;
-
-    let config = FleetConfig::from_specs(&hosts);
-    let session_id = Uuid::new_v4();
-    let ctx = ExecutionContext::new(session_id, "fleet");
-
-    println!("Fleet run: {goal}");
-    println!("Capability : {capability}");
-    println!("Hosts ({}) : {}", config.len(), hosts.join(", "));
-    println!();
-
-    let results = execute_on_fleet(&config, &capability, &parsed_args, &ctx).await;
-
-    let mut hostnames: Vec<&String> = results.keys().collect();
-    hostnames.sort();
-
-    let mut ok = 0usize;
-    let mut failed = 0usize;
-    for hostname in hostnames {
-        match &results[hostname] {
-            CapabilityResult::Success { output } => {
-                ok += 1;
-                println!("✔ {hostname}: success");
-                if let Ok(pretty) = serde_json::to_string(output) {
-                    println!("    {pretty}");
-                }
-            }
-            CapabilityResult::Failure { error, .. } => {
-                failed += 1;
-                println!("x {hostname}: FAILED — {error}");
-            }
-            CapabilityResult::DryRun { predicted_effect } => {
-                ok += 1;
-                println!("• {hostname}: dry-run");
-                if let Ok(pretty) = serde_json::to_string(predicted_effect) {
-                    println!("    {pretty}");
-                }
-            }
-        }
-    }
-
-    println!();
-    println!(
-        "Fleet summary: {ok} succeeded, {failed} failed across {} host(s).",
-        config.len()
-    );
-    Ok(())
-}
-
 fn list_capabilities() {
-    let executor = Arc::new(RealCommandExecutor);
+    let executor = Arc::new(HardenedExecutor::for_builtin_capabilities());
     let caps = all_capabilities(executor);
     println!("Available capabilities ({}):", caps.len());
     for cap in &caps {
@@ -561,46 +562,79 @@ fn list_capabilities() {
     }
 }
 
-fn show_policy() {
-    let evaluator = default_policy();
+fn show_policy() -> Result<()> {
+    let evaluator = policy_source::load()?;
     let rules = evaluator.rules();
-
-    println!(
-        "Default Sentinel policy (deny-by-default) — {} rule(s):",
-        rules.len()
-    );
-    println!("{:-<78}", "");
-    println!(
-        "  {:<5} {:<33} {:<16} Conditions",
-        "Prio", "Rule ID", "Effect"
-    );
-    println!("{:-<78}", "");
-
-    for rule in rules {
-        let conditions = if rule.conditions.is_empty() {
-            "<always matches>".to_string()
-        } else {
-            rule.conditions
-                .iter()
-                .map(describe_condition)
-                .collect::<Vec<_>>()
-                .join(" AND ")
-        };
-        let effect = if rule.enabled {
-            format!("{:?}", rule.effect)
-        } else {
-            format!("{:?} (disabled)", rule.effect)
-        };
+    let print_rules = |rules: &[sentinel_policy::PolicyRule]| {
+        println!("{:-<78}", "");
         println!(
-            "  {:<5} {:<33} {:<16} {}",
-            rule.priority, rule.id, effect, conditions
+            "  {:<5} {:<33} {:<16} Conditions",
+            "Prio", "Rule ID", "Effect"
         );
-        println!("        {}", rule.description);
-    }
+        println!("{:-<78}", "");
+        for rule in rules {
+            let conditions = if rule.conditions.is_empty() {
+                "<always matches>".to_string()
+            } else {
+                rule.conditions
+                    .iter()
+                    .map(describe_condition)
+                    .collect::<Vec<_>>()
+                    .join(" AND ")
+            };
+            let effect = if rule.enabled {
+                format!("{:?}", rule.effect)
+            } else {
+                format!("{:?} (disabled)", rule.effect)
+            };
+            println!(
+                "  {:<5} {:<33} {:<16} {}",
+                rule.priority, rule.id, effect, conditions
+            );
+            println!("        {}", rule.description);
+        }
+        println!("{:-<78}", "");
+    };
 
-    println!("{:-<78}", "");
+    match policy_source::path() {
+        Some(path) => println!(
+            "Sentinel policy from {} (deny-by-default) — {} rule(s):",
+            path.display(),
+            rules.len()
+        ),
+        None => println!(
+            "Default Sentinel policy (deny-by-default) — {} rule(s):",
+            rules.len()
+        ),
+    }
+    print_rules(rules);
     println!("Rules are evaluated in ascending priority order; the first match wins.");
     println!("Any request not matched by an Allow/AuditOnly rule is denied by default.");
+
+    let tightening = evaluator.tightening_rules();
+    if !tightening.is_empty() {
+        println!();
+        println!(
+            "Tightening rules from the policy file — {} rule(s):",
+            tightening.len()
+        );
+        print_rules(tightening);
+        println!("Applied after the rules above; the stricter outcome wins, never the weaker.");
+    }
+
+    println!();
+    println!("Resource guards (checked before any rule; mutating requests only):");
+    for guard in evaluator.resource_guards() {
+        let mut protects = Vec::new();
+        if !guard.protected_paths.is_empty() {
+            protects.push(format!("paths {}", guard.protected_paths.join(", ")));
+        }
+        if !guard.protected_services.is_empty() {
+            protects.push(format!("services {}", guard.protected_services.join(", ")));
+        }
+        println!("  {:<20} {}", guard.id, protects.join("; "));
+    }
+    Ok(())
 }
 
 /// Render a [`RuleCondition`] as a concise, human-readable predicate string.
@@ -643,19 +677,37 @@ fn describe_condition(cond: &RuleCondition) -> String {
     }
 }
 
-fn verify_audit(path: &std::path::Path) -> Result<()> {
+fn audit_keygen(out: &std::path::Path) -> Result<()> {
+    let signer = sentinel_audit::AuditSigner::generate()?;
+    signer
+        .save(out)
+        .map_err(|e| anyhow::anyhow!("could not write {}: {e}", out.display()))?;
+    eprintln!("Private key written to {} (mode 0600).", out.display());
+    eprintln!("Sign audit logs by setting SENTINEL_AUDIT_KEY to that path.");
+    eprintln!(
+        "Give verifiers this public key (key id {}):",
+        signer.key_id()
+    );
+    println!("{}", signer.public_key_hex());
+    Ok(())
+}
+
+fn verify_audit(
+    path: &std::path::Path,
+    pubkey: Option<&str>,
+    require_signature: bool,
+) -> Result<()> {
+    use sentinel_audit::signing::{
+        parse_checkpoints, parse_public_key, sidecar_path, verify_checkpoints,
+    };
     use sentinel_audit::verifier::AuditVerifier;
 
     let content = std::fs::read_to_string(path)?;
-    let result = AuditVerifier::verify_jsonl(&content)
+    let events = AuditVerifier::parse_jsonl(&content)
         .map_err(|e| anyhow::anyhow!("Audit verification error: {}", e))?;
+    let result = AuditVerifier::verify_events(&events);
 
-    if result.valid {
-        println!(
-            "Audit log VALID — {} event(s) verified.",
-            result.events_checked
-        );
-    } else {
+    if !result.valid {
         eprintln!(
             "Audit log INVALID — chain broken at sequence {}.",
             result.first_broken_at.unwrap_or(0)
@@ -666,5 +718,65 @@ fn verify_audit(path: &std::path::Path) -> Result<()> {
         std::process::exit(1);
     }
 
+    let sidecar = sidecar_path(path);
+    let Some(pubkey) = pubkey else {
+        println!(
+            "Audit log VALID — {} event(s) verified.",
+            result.events_checked
+        );
+        if sidecar.exists() {
+            println!(
+                "Signatures NOT checked: {} exists; pass --pubkey to verify it.",
+                sidecar.display()
+            );
+        }
+        return Ok(());
+    };
+
+    // A --pubkey value is the key itself or a file holding it.
+    let key_text = if std::path::Path::new(pubkey).is_file() {
+        std::fs::read_to_string(pubkey)?
+    } else {
+        pubkey.to_string()
+    };
+    let key = parse_public_key(&key_text)?;
+
+    let checkpoints = match std::fs::read_to_string(&sidecar) {
+        Ok(text) => parse_checkpoints(&text)
+            .map_err(|e| anyhow::anyhow!("Signature sidecar unreadable: {e}"))?,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(e.into()),
+    };
+    let sig = verify_checkpoints(&events, &checkpoints, &key);
+
+    if let Some(err) = &sig.error {
+        eprintln!("Audit log INVALID — hash chain is consistent but signatures are not.");
+        eprintln!("Error: {err}");
+        std::process::exit(1);
+    }
+    if sig.fully_signed() {
+        println!(
+            "Audit log VALID — {} event(s) verified, {} signed checkpoint(s), every event covered.",
+            result.events_checked, sig.checkpoints_verified
+        );
+        return Ok(());
+    }
+
+    let detail = if sig.checkpoints_verified == 0 {
+        format!("no signed checkpoints found at {}", sidecar.display())
+    } else {
+        format!(
+            "last {} of {} event(s) are not covered by a signature",
+            sig.unsigned_tail, result.events_checked
+        )
+    };
+    if require_signature {
+        eprintln!("Audit log INVALID — {detail}.");
+        std::process::exit(1);
+    }
+    println!(
+        "Audit log VALID (hash chain) — {} event(s) verified; WARNING: {detail}.",
+        result.events_checked
+    );
     Ok(())
 }

@@ -39,8 +39,11 @@ cargo test --workspace
 cargo audit
 ```
 
-The first three must pass; CI runs the same commands. `cargo audit` findings
-should be resolved or explained in the PR.
+The first three must pass; CI runs the same commands, plus `cargo deny check`
+(advisories, licences, sources — configured in `deny.toml`). Findings must be
+resolved, or ignored in `deny.toml` with a reason. See
+[docs/SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md) for that, for bumping the pinned
+toolchain, and for updating a pinned action.
 
 ## Workspace Layout
 

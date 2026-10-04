@@ -14,10 +14,13 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+ed25519-dalek = { workspace = true }
+getrandom = { workspace = true }
 tokio = { workspace = true }
 prometheus = { workspace = true }
 
 [dev-dependencies]
+proptest = { workspace = true }
 tokio = { workspace = true }
 tempfile = { workspace = true }
 criterion = { workspace = true }

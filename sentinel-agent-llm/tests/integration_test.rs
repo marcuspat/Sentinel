@@ -161,6 +161,8 @@ fn fast_config() -> ReasoningConfig {
         max_investigation_rounds: 5,
         max_tokens_per_call: 512,
         investigation_timeout_ms: 10_000,
+        native_tool_use: true,
+        rollback_on_failure: true,
     }
 }
 
@@ -475,5 +477,205 @@ async fn integration_stub_mode_still_works() {
     // Stub result contains {"stub": true}
     if let sentinel_core::CapabilityResult::Success { output } = &obs[0].result {
         assert_eq!(output["stub"], true, "expected stub result in stub mode");
+    }
+}
+
+// ── One executor, one meaning of approval (ADR-019) ───────────────────────────
+
+mod unified_executor {
+    use super::*;
+    use sentinel_core::{
+        Capability, CapabilityKind, CapabilityManifest, CapabilityResult, CoreError,
+        ExecutionContext, Plan, PlanStep, RiskTier, StepStatus,
+    };
+    use sentinel_policy::default_policy;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    struct Scripted {
+        manifest: CapabilityManifest,
+        fail: bool,
+        invoked: Arc<AtomicU32>,
+        inverted: Arc<AtomicU32>,
+    }
+
+    fn scripted(id: &str, kind: CapabilityKind, tier: RiskTier, fail: bool) -> Scripted {
+        Scripted {
+            manifest: CapabilityManifest {
+                id: id.into(),
+                name: id.into(),
+                description: id.into(),
+                kind,
+                risk_tier: tier,
+                resource_impact: Default::default(),
+                has_inverse: true,
+                version: "1".into(),
+            },
+            fail,
+            invoked: Arc::new(AtomicU32::new(0)),
+            inverted: Arc::new(AtomicU32::new(0)),
+        }
+    }
+
+    #[async_trait]
+    impl Capability for Scripted {
+        fn manifest(&self) -> &CapabilityManifest {
+            &self.manifest
+        }
+        async fn invoke(&self, _a: serde_json::Value, _c: &ExecutionContext) -> CapabilityResult {
+            self.invoked.fetch_add(1, Ordering::SeqCst);
+            if self.fail {
+                CapabilityResult::failure("disk on fire".to_string(), false)
+            } else {
+                CapabilityResult::success(serde_json::json!({"ok": true}))
+            }
+        }
+        async fn dry_run(&self, _a: serde_json::Value, _c: &ExecutionContext) -> CapabilityResult {
+            CapabilityResult::dry_run(serde_json::json!({}))
+        }
+        async fn invoke_inverse(
+            &self,
+            _a: serde_json::Value,
+            _c: &ExecutionContext,
+        ) -> Option<CapabilityResult> {
+            self.inverted.fetch_add(1, Ordering::SeqCst);
+            Some(CapabilityResult::success(serde_json::json!({})))
+        }
+        fn validate_args(&self, _a: &serde_json::Value) -> Result<(), CoreError> {
+            Ok(())
+        }
+    }
+
+    fn loop_with(caps: Vec<Scripted>, config: ReasoningConfig) -> ReasoningLoop {
+        let mut registry = CapabilityRegistry::new();
+        for c in &caps {
+            registry.register(c.manifest.clone());
+        }
+        let session_id = Uuid::new_v4();
+        ReasoningLoop::new(
+            Box::new(SequentialMockBackend::new(Vec::<String>::new())),
+            Arc::new(registry),
+            Arc::new(default_policy()),
+            Arc::new(Mutex::new(AuditLog::new(session_id, None))),
+            config,
+        )
+        .with_capabilities(
+            caps.into_iter()
+                .map(|c| Box::new(c) as Box<dyn Capability>)
+                .collect(),
+        )
+    }
+
+    fn plan(steps: &[(&str, bool)]) -> Plan {
+        let mut p = Plan::new(Uuid::new_v4(), "goal".into(), "why".into());
+        for (i, (id, can_rollback)) in steps.iter().enumerate() {
+            let mut s = PlanStep::new(i as u32 + 1, *id, serde_json::json!({}), "d", RiskTier::Low);
+            s.can_rollback = *can_rollback;
+            p.add_step(s);
+        }
+        p
+    }
+
+    /// The bug named in the MCP spec: `sentinel run` skipped Medium-risk
+    /// mutating steps even after the operator approved the plan.
+    #[tokio::test]
+    async fn approved_medium_risk_mutating_step_runs_in_the_loop() {
+        let cap = scripted("vacuum", CapabilityKind::Mutating, RiskTier::Medium, false);
+        let invoked = cap.invoked.clone();
+        let loop_ = loop_with(vec![cap], fast_config());
+        let mut p = plan(&[("vacuum", false)]);
+        let summary = loop_
+            .execute_plan(
+                Uuid::new_v4(),
+                "localhost",
+                &mut p,
+                ApprovalDecision::FullApproval,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            invoked.load(Ordering::SeqCst),
+            1,
+            "the approved step must run"
+        );
+        assert_eq!(summary.steps_completed, 1);
+        assert_eq!(summary.steps_failed, 0);
+        assert_eq!(p.steps[0].status, StepStatus::Completed);
+    }
+
+    /// The old loop executor reported a `Failure` result as a completed step.
+    #[tokio::test]
+    async fn failure_result_is_reported_as_failed_and_triggers_rollback() {
+        let first = scripted("first", CapabilityKind::ReadOnly, RiskTier::Low, false);
+        let inverted = first.inverted.clone();
+        let bad = scripted("bad", CapabilityKind::ReadOnly, RiskTier::Low, true);
+        let never = scripted("never", CapabilityKind::ReadOnly, RiskTier::Low, false);
+        let never_invoked = never.invoked.clone();
+        let loop_ = loop_with(vec![first, bad, never], fast_config());
+        let mut p = plan(&[("first", true), ("bad", false), ("never", false)]);
+        let summary = loop_
+            .execute_plan(
+                Uuid::new_v4(),
+                "localhost",
+                &mut p,
+                ApprovalDecision::FullApproval,
+            )
+            .await
+            .unwrap();
+        assert_eq!(summary.steps_failed, 1);
+        assert_eq!(summary.steps_rolled_back, 1);
+        assert_eq!(summary.steps_completed, 0);
+        assert_eq!(inverted.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            never_invoked.load(Ordering::SeqCst),
+            0,
+            "halt after a failure"
+        );
+        assert_eq!(p.steps[0].status, StepStatus::RolledBack);
+        assert_eq!(p.steps[1].status, StepStatus::Failed);
+        assert_eq!(p.steps[2].status, StepStatus::Skipped);
+    }
+
+    #[tokio::test]
+    async fn rollback_can_be_disabled_in_the_loop() {
+        let first = scripted("first", CapabilityKind::ReadOnly, RiskTier::Low, false);
+        let inverted = first.inverted.clone();
+        let bad = scripted("bad", CapabilityKind::ReadOnly, RiskTier::Low, true);
+        let config = ReasoningConfig {
+            rollback_on_failure: false,
+            ..fast_config()
+        };
+        let loop_ = loop_with(vec![first, bad], config);
+        let mut p = plan(&[("first", true), ("bad", false)]);
+        let summary = loop_
+            .execute_plan(
+                Uuid::new_v4(),
+                "localhost",
+                &mut p,
+                ApprovalDecision::FullApproval,
+            )
+            .await
+            .unwrap();
+        assert_eq!(inverted.load(Ordering::SeqCst), 0);
+        assert_eq!(summary.steps_rolled_back, 0);
+        assert_eq!(summary.steps_completed, 1);
+    }
+
+    #[tokio::test]
+    async fn high_risk_mutating_step_is_still_denied_after_approval() {
+        let cap = scripted("danger", CapabilityKind::Mutating, RiskTier::High, false);
+        let invoked = cap.invoked.clone();
+        let loop_ = loop_with(vec![cap], fast_config());
+        let mut p = plan(&[("danger", false)]);
+        let summary = loop_
+            .execute_plan(
+                Uuid::new_v4(),
+                "localhost",
+                &mut p,
+                ApprovalDecision::FullApproval,
+            )
+            .await
+            .unwrap();
+        assert_eq!(invoked.load(Ordering::SeqCst), 0);
+        assert_eq!(summary.steps_failed, 1);
     }
 }

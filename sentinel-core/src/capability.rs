@@ -205,6 +205,16 @@ pub trait Capability: Send + Sync {
     /// Called by the execution harness before `invoke` / `dry_run`.
     /// Return `Err(CoreError::InvalidArgs(_))` for any validation failure.
     fn validate_args(&self, args: &serde_json::Value) -> Result<(), CoreError>;
+
+    /// JSON Schema (an `object` schema) describing this capability's
+    /// arguments.  Offered to LLM providers as the tool input schema, so the
+    /// model is told the argument names and types instead of guessing them.
+    ///
+    /// The default accepts any object.  The schema is guidance for the model;
+    /// [`validate_args`](Self::validate_args) remains the authority.
+    fn args_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object", "additionalProperties": true})
+    }
 }
 
 #[cfg(test)]

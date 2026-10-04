@@ -10,26 +10,19 @@ use std::io::{IsTerminal, Write as _};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 use uuid::Uuid;
 
-use sentinel_audit::AuditEventType;
 use sentinel_capabilities::all_capabilities;
-use sentinel_exec::RealCommandExecutor;
+use sentinel_exec::HardenedExecutor;
 use sentinel_mcp::{
-    default_state_dir, execute_approved_plan, index_capabilities, plan_status_json, AuditSink,
+    default_state_dir, execute_approved_plan_with, index_capabilities, plan_status_json, AuditSink,
     Gate, GateConfig, PlanStatus, PlanStore, StoredPlan,
 };
-use sentinel_policy::default_policy;
+use sentinel_tui::policy_source;
 
 fn resolve_state_dir(state_dir: Option<PathBuf>) -> PathBuf {
     state_dir.unwrap_or_else(default_state_dir)
-}
-
-fn operator_identity() -> String {
-    std::env::var("USER")
-        .or_else(|_| std::env::var("LOGNAME"))
-        .unwrap_or_else(|_| "unknown".into())
 }
 
 pub async fn serve(mcp: bool, state_dir: Option<PathBuf>, host: String) -> Result<()> {
@@ -39,8 +32,8 @@ pub async fn serve(mcp: bool, state_dir: Option<PathBuf>, host: String) -> Resul
     let state_dir = resolve_state_dir(state_dir);
     let mut config = GateConfig::new(&state_dir);
     config.host = host;
-    let caps = all_capabilities(Arc::new(RealCommandExecutor));
-    let gate = Gate::new(config, caps, default_policy())?;
+    let caps = all_capabilities(Arc::new(HardenedExecutor::for_builtin_capabilities()));
+    let gate = Gate::new(config, caps, policy_source::load()?)?;
     tracing::info!(
         state_dir = %state_dir.display(),
         audit = %gate.audit().path().display(),
@@ -114,12 +107,7 @@ pub async fn approve(plan_id: Uuid, state_dir: Option<PathBuf>) -> Result<()> {
     let rec = store.load(plan_id)?;
     print_plan_for_review(&rec);
 
-    if rec.status != PlanStatus::PendingApproval {
-        bail!("plan {plan_id} is {}, not PendingApproval", rec.status);
-    }
-    if !rec.integrity_ok() {
-        bail!("plan {plan_id} failed its integrity check (content changed after proposal); refusing to approve");
-    }
+    sentinel_mcp::check_approvable(&rec)?;
 
     // Speed bump against an agent that has shell access running this for
     // itself: approval needs a human at a terminal.  This is NOT a security
@@ -140,16 +128,9 @@ pub async fn approve(plan_id: Uuid, state_dir: Option<PathBuf>) -> Result<()> {
         bail!("confirmation did not match; plan left PendingApproval");
     }
 
-    let who = operator_identity();
-    let audit = AuditSink::create(&state_dir, "approve")?;
-    audit
-        .record(AuditEventType::PlanApproved {
-            plan_id,
-            approval_mode: format!("operator_cli:{who}:{}", &rec.content_hash[..12]),
-        })
-        .await
-        .map_err(|e| anyhow!("audit write failed; plan NOT approved: {e}"))?;
-    let rec = store.approve(plan_id, &who, Some(audit.path_string()))?;
+    let who = sentinel_mcp::operator_identity();
+    let (rec, audit) =
+        sentinel_mcp::approve_plan(&store, &state_dir, plan_id, &who, "operator_cli").await?;
     println!(
         "Approved {} (hash {}). Run `sentinel execute {}` to execute it.",
         rec.plan.id, rec.content_hash, rec.plan.id
@@ -161,16 +142,8 @@ pub async fn approve(plan_id: Uuid, state_dir: Option<PathBuf>) -> Result<()> {
 pub async fn reject(plan_id: Uuid, reason: String, state_dir: Option<PathBuf>) -> Result<()> {
     let state_dir = resolve_state_dir(state_dir);
     let store = PlanStore::open(&state_dir)?;
-    let who = operator_identity();
-    let audit = AuditSink::create(&state_dir, "reject")?;
-    audit
-        .record(AuditEventType::PlanRejected {
-            plan_id,
-            reason: reason.clone(),
-        })
-        .await
-        .map_err(|e| anyhow!("audit write failed: {e}"))?;
-    let rec = store.reject(plan_id, &who, &reason, Some(audit.path_string()))?;
+    let who = sentinel_mcp::operator_identity();
+    let rec = sentinel_mcp::reject_plan(&store, &state_dir, plan_id, &who, &reason).await?;
     println!("Rejected {}: {reason}", rec.plan.id);
     Ok(())
 }
@@ -182,11 +155,17 @@ pub async fn execute(
 ) -> Result<()> {
     let state_dir = resolve_state_dir(state_dir);
     let store = PlanStore::open(&state_dir)?;
-    let caps = index_capabilities(all_capabilities(Arc::new(RealCommandExecutor)));
-    let policy = default_policy();
+    let caps = index_capabilities(all_capabilities(Arc::new(
+        HardenedExecutor::for_builtin_capabilities(),
+    )));
+    let policy = policy_source::load()?;
     let audit = AuditSink::create(&state_dir, "execute")?;
-    let report =
-        execute_approved_plan(&store, plan_id, &caps, &policy, &audit, step_timeout_ms).await?;
+    let opts = sentinel_mcp::RunOptions {
+        step_timeout_ms: Some(step_timeout_ms),
+        rollback: sentinel_tui::runtime_opts::rollback_enabled(),
+        stub_unimplemented: false,
+    };
+    let report = execute_approved_plan_with(&store, plan_id, &caps, &policy, &audit, &opts).await?;
     for s in &report.steps {
         println!(
             "  {}. {:<20} {:<10} {}",

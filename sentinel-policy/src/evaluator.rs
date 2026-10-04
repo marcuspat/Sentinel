@@ -92,6 +92,9 @@ pub struct PolicyEvaluator {
     rules: Vec<PolicyRule>,
     kill_switch: Arc<KillSwitch>,
     resource_guards: Vec<ResourceGuard>,
+    /// Operator rules that may only make a decision stricter (ADR-018).
+    /// Sorted ascending by `priority`.
+    tightening_rules: Vec<PolicyRule>,
 }
 
 impl PolicyEvaluator {
@@ -107,7 +110,29 @@ impl PolicyEvaluator {
             rules,
             kill_switch,
             resource_guards,
+            tightening_rules: Vec::new(),
         }
+    }
+
+    /// Add rules that are consulted *after* the main rules and can only make
+    /// the outcome stricter: the final effect is the stricter of the two
+    /// (`Deny` > `RequireApproval` > `AuditOnly` > `Allow`).  A tightening
+    /// rule can therefore never turn a denial or an approval requirement
+    /// into something weaker.
+    pub fn with_tightening_rules(mut self, mut rules: Vec<PolicyRule>) -> Self {
+        rules.sort_by_key(|r| r.priority);
+        self.tightening_rules = rules;
+        self
+    }
+
+    /// The tightening rules, sorted ascending by priority.
+    pub fn tightening_rules(&self) -> &[PolicyRule] {
+        &self.tightening_rules
+    }
+
+    /// The resource guards in force.
+    pub fn resource_guards(&self) -> &[ResourceGuard] {
+        &self.resource_guards
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -146,7 +171,21 @@ impl PolicyEvaluator {
         }
 
         // Step 3 + 4 — rules (deny-by-default inside apply_rules)
-        self.apply_rules(&request)
+        let base = self.apply_rules(&request);
+
+        // Step 5 — operator tightening rules: first match, stricter wins.
+        match self.tightening_rules.iter().find(|r| r.matches(&request)) {
+            Some(rule) => {
+                let overlay = decision_for(rule, &request);
+                if strictness(&overlay.effect) > strictness(&base.effect) {
+                    debug!(rule_id = %rule.id, "tightening rule made the decision stricter");
+                    overlay
+                } else {
+                    base
+                }
+            }
+            None => base,
+        }
     }
 
     /// Add a rule to the evaluator, keeping the list sorted by priority.
@@ -231,37 +270,7 @@ impl PolicyEvaluator {
             if rule.matches(req) {
                 debug!(rule_id = %rule.id, effect = ?rule.effect, "rule matched");
 
-                let (effect, rationale) = match &rule.effect {
-                    RuleEffect::Allow => (
-                        PolicyEffect::Allowed,
-                        format!("Allowed by rule '{}': {}", rule.id, rule.description),
-                    ),
-                    RuleEffect::Deny => (
-                        PolicyEffect::Denied {
-                            reason: format!("Denied by rule '{}': {}", rule.id, rule.description),
-                        },
-                        format!("Denied by rule '{}': {}", rule.id, rule.description),
-                    ),
-                    RuleEffect::RequireApproval => (
-                        PolicyEffect::RequiresApproval,
-                        format!(
-                            "Approval required by rule '{}': {}",
-                            rule.id, rule.description
-                        ),
-                    ),
-                    RuleEffect::AuditOnly => (
-                        PolicyEffect::AuditOnly,
-                        format!("Audit-only by rule '{}': {}", rule.id, rule.description),
-                    ),
-                };
-
-                return PolicyDecision {
-                    request: req.clone(),
-                    effect,
-                    matched_rule: Some(rule.id.clone()),
-                    rationale,
-                    decided_at: Utc::now(),
-                };
+                return decision_for(rule, req);
             }
         }
 
@@ -283,6 +292,50 @@ impl PolicyEvaluator {
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
+
+/// Rank used to combine a main-rule decision with a tightening rule.
+fn strictness(effect: &PolicyEffect) -> u8 {
+    match effect {
+        PolicyEffect::Allowed => 0,
+        PolicyEffect::AuditOnly => 1,
+        PolicyEffect::RequiresApproval => 2,
+        PolicyEffect::Denied { .. } => 3,
+    }
+}
+
+/// The decision a matching `rule` produces for `req`.
+fn decision_for(rule: &PolicyRule, req: &PolicyRequest) -> PolicyDecision {
+    let (effect, rationale) = match &rule.effect {
+        RuleEffect::Allow => (
+            PolicyEffect::Allowed,
+            format!("Allowed by rule '{}': {}", rule.id, rule.description),
+        ),
+        RuleEffect::Deny => (
+            PolicyEffect::Denied {
+                reason: format!("Denied by rule '{}': {}", rule.id, rule.description),
+            },
+            format!("Denied by rule '{}': {}", rule.id, rule.description),
+        ),
+        RuleEffect::RequireApproval => (
+            PolicyEffect::RequiresApproval,
+            format!(
+                "Approval required by rule '{}': {}",
+                rule.id, rule.description
+            ),
+        ),
+        RuleEffect::AuditOnly => (
+            PolicyEffect::AuditOnly,
+            format!("Audit-only by rule '{}': {}", rule.id, rule.description),
+        ),
+    };
+    PolicyDecision {
+        request: req.clone(),
+        effect,
+        matched_rule: Some(rule.id.clone()),
+        rationale,
+        decided_at: Utc::now(),
+    }
+}
 
 #[cfg(test)]
 mod tests {

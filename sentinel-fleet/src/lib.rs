@@ -9,8 +9,8 @@ pub mod topology;
 
 pub use error::FleetError;
 pub use fleet_exec::{
-    execute_on_fleet, execute_on_fleet_with, FleetConfig, FleetResult, HostConfig, HostExecutor,
-    SshHostExecutor,
+    execute_on_fleet, execute_on_fleet_with, validate_capability_id, FleetConfig, FleetResult,
+    HostConfig, HostExecutor, SshHostExecutor,
 };
 pub use host::{Host, HostId, HostStatus};
 pub use staged_rollout::{CanaryConfig, RolloutStage, RolloutStatus, StagedRollout};

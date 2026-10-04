@@ -1,11 +1,16 @@
 # ADR-008: Fleet Mode with Mutual TLS and Certificate Pinning
 
-**Status:** Accepted  
+**Status:** Accepted — not implemented in the shipped fleet path (see note); amended by [ADR-022](ADR-022-fleet-hardening.md)  
 **Date:** 2026-05-26  
 **Deciders:** Core team  
 **Categories:** Security, Fleet, Networking, Authentication
 
 ---
+
+> **Implementation note (0.2.0).** `sentinel fleet` dispatches over SSH
+> (ADR-022). The mTLS and certificate-pinning code described here exists in
+> `sentinel-fleet` and is covered by unit tests, but no command uses it.
+> Whether it stays in the tree is open (roadmap 14f).
 
 ## Context
 

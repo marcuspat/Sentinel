@@ -21,17 +21,22 @@
 pub mod audit;
 pub mod execute;
 pub mod gate;
+pub mod operator;
 pub mod server;
 pub mod store;
 
 use std::path::PathBuf;
 
 pub use audit::AuditSink;
-pub use execute::{execute_approved_plan, ExecuteError, ExecuteReport, StepOutcome};
+pub use execute::{
+    execute_approved_plan, execute_approved_plan_with, ExecuteError, ExecuteReport, StepOutcome,
+};
 pub use gate::{
     index_capabilities, plan_status_json, CapabilitySet, Gate, GateConfig, GateError, ToolOutcome,
     TOOL_NAMES,
 };
+pub use operator::{approve_plan, check_approvable, operator_identity, reject_plan, OperatorError};
+pub use sentinel_runner::RunOptions;
 pub use server::{serve, McpServer, SUPPORTED_PROTOCOL_VERSIONS};
 pub use store::{PlanStatus, PlanStore, StoreError, StoredPlan};
 

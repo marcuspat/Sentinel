@@ -15,18 +15,16 @@
 //! marked `Skipped`.  Automatic rollback is not performed in this version
 //! (see ADR-013, "Known gaps").
 
-use std::time::{Duration, Instant};
-
 use serde::Serialize;
 use uuid::Uuid;
 
 use sentinel_audit::AuditEventType;
-use sentinel_core::{CapabilityResult, ExecutionContext, StepStatus};
-use sentinel_policy::{PolicyEffect, PolicyEvaluator, PolicyRequest};
+use sentinel_policy::PolicyEvaluator;
+use sentinel_runner::{run_plan, RunError, RunOptions, StepState};
 
 use crate::audit::AuditSink;
-use crate::gate::{effect_label, CapabilitySet};
-use crate::store::{expect_status, ExecutionRecord, PlanStatus, PlanStore, StoreError};
+use crate::gate::CapabilitySet;
+use crate::store::{PlanStatus, PlanStore, StoreError};
 
 /// Per-step outcome reported back to the operator.
 #[derive(Debug, Clone, Serialize)]
@@ -58,7 +56,7 @@ pub enum ExecuteError {
     Audit(String),
 }
 
-/// Execute a stored, operator-approved plan.
+/// Execute a stored, operator-approved plan with rollback enabled.
 pub async fn execute_approved_plan(
     store: &PlanStore,
     plan_id: Uuid,
@@ -67,43 +65,51 @@ pub async fn execute_approved_plan(
     audit: &AuditSink,
     step_timeout_ms: u64,
 ) -> Result<ExecuteReport, ExecuteError> {
-    let mut rec = store.load(plan_id)?;
-    if rec.status != PlanStatus::Approved {
-        // Record the refused attempt, then refuse.
-        let _ = audit
-            .record(AuditEventType::PolicyDenied {
-                capability_id: format!("plan:{plan_id}"),
-                reason: format!("execution refused: plan status is {}", rec.status),
-            })
-            .await;
-        return Err(ExecuteError::NotApproved {
-            id: plan_id,
-            status: rec.status,
-        });
-    }
-    if !rec.integrity_ok() {
-        let _ = audit
-            .record(AuditEventType::PolicyDenied {
-                capability_id: format!("plan:{plan_id}"),
-                reason: "execution refused: plan content does not match approved hash".into(),
-            })
-            .await;
-        return Err(StoreError::IntegrityMismatch(plan_id).into());
-    }
+    let opts = RunOptions {
+        step_timeout_ms: Some(step_timeout_ms),
+        rollback: true,
+        stub_unimplemented: false,
+    };
+    execute_approved_plan_with(store, plan_id, caps, policy, audit, &opts).await
+}
 
-    // Claim the plan so it cannot be executed twice.
-    expect_status(&rec, PlanStatus::Approved)?;
-    rec.status = PlanStatus::Executing;
-    rec.execution = Some(ExecutionRecord {
-        started_at: chrono::Utc::now(),
-        finished_at: None,
-        steps_completed: 0,
-        steps_failed: 0,
-        steps_skipped: 0,
-        audit_file: Some(audit.path_string()),
-        error: None,
-    });
-    store.save(&rec)?;
+/// Execute a stored, operator-approved plan with explicit executor options.
+pub async fn execute_approved_plan_with(
+    store: &PlanStore,
+    plan_id: Uuid,
+    caps: &CapabilitySet,
+    policy: &PolicyEvaluator,
+    audit: &AuditSink,
+    opts: &RunOptions,
+) -> Result<ExecuteReport, ExecuteError> {
+    // Claim the plan: `Approved -> Executing` under the plan lock.  Of any
+    // number of concurrent `sentinel execute` processes exactly one gets
+    // past this line; the rest are refused and record the refusal.
+    let mut rec = match store.claim_for_execution(plan_id, Some(audit.path_string())) {
+        Ok(rec) => rec,
+        Err(StoreError::InvalidTransition { actual, .. }) => {
+            let _ = audit
+                .record(AuditEventType::PolicyDenied {
+                    capability_id: format!("plan:{plan_id}"),
+                    reason: format!("execution refused: plan status is {actual}"),
+                })
+                .await;
+            return Err(ExecuteError::NotApproved {
+                id: plan_id,
+                status: actual,
+            });
+        }
+        Err(StoreError::IntegrityMismatch(id)) => {
+            let _ = audit
+                .record(AuditEventType::PolicyDenied {
+                    capability_id: format!("plan:{plan_id}"),
+                    reason: "execution refused: plan content does not match approved hash".into(),
+                })
+                .await;
+            return Err(StoreError::IntegrityMismatch(id).into());
+        }
+        Err(e) => return Err(e.into()),
+    };
 
     let approver = rec
         .decision
@@ -112,6 +118,7 @@ pub async fn execute_approved_plan(
         .unwrap_or_else(|| "unknown".into());
     let audit_err = |e: sentinel_audit::AuditError| ExecuteError::Audit(e.to_string());
 
+    let host = rec.host.clone();
     let run = async {
         audit
             .record(AuditEventType::GoalSubmitted {
@@ -131,153 +138,46 @@ pub async fn execute_approved_plan(
             .await
             .map_err(audit_err)?;
 
-        let mut outcomes = Vec::new();
-        let mut halted = false;
-        let started = Instant::now();
-        let mut completed = 0u32;
+        // The same executor `sentinel run` uses (ADR-019).
+        let report = run_plan(
+            &mut rec.plan,
+            &host,
+            audit.session_id(),
+            caps,
+            policy,
+            audit,
+            opts,
+        )
+        .await
+        .map_err(|e| match e {
+            RunError::Audit(msg) => ExecuteError::Audit(msg),
+            // Cannot happen: the plan was claimed as Approved under the lock.
+            RunError::NotApproved => ExecuteError::NotApproved {
+                id: plan_id,
+                status: PlanStatus::Executing,
+            },
+        })?;
 
-        for i in 0..rec.plan.steps.len() {
-            let step = rec.plan.steps[i].clone();
-            if halted {
-                rec.plan.steps[i].status = StepStatus::Skipped;
-                outcomes.push(StepOutcome {
-                    sequence: step.sequence,
-                    capability_id: step.capability_id.clone(),
-                    status: "Skipped".into(),
-                    policy: None,
-                    detail: "skipped after an earlier step was denied or failed".into(),
-                });
-                continue;
-            }
-
-            let Some(cap) = caps.get(&step.capability_id) else {
-                rec.plan.steps[i].status = StepStatus::Failed;
-                halted = true;
-                outcomes.push(StepOutcome {
-                    sequence: step.sequence,
-                    capability_id: step.capability_id.clone(),
-                    status: "Failed".into(),
-                    policy: None,
-                    detail: "capability is not registered in this binary".into(),
-                });
-                continue;
-            };
-            let m = cap.manifest();
-
-            let decision = policy.evaluate(PolicyRequest {
-                session_id: audit.session_id(),
-                capability_id: m.id.clone(),
-                capability_kind: m.kind,
-                // Current manifest tier, not the (possibly stale) stored one.
-                risk_tier: m.risk_tier,
-                args: step.args.clone(),
-                target_host: rec.host.clone(),
-                timestamp: chrono::Utc::now(),
-                session_phase: Some("Executing".into()),
-            });
-            audit
-                .record(AuditEventType::PolicyEvaluated {
-                    capability_id: m.id.clone(),
-                    effect: effect_label(&decision.effect).into(),
-                    rule_id: decision.matched_rule.clone(),
-                })
-                .await
-                .map_err(audit_err)?;
-
-            if let PolicyEffect::Denied { reason } = &decision.effect {
-                audit
-                    .record(AuditEventType::PolicyDenied {
-                        capability_id: m.id.clone(),
-                        reason: reason.clone(),
-                    })
-                    .await
-                    .map_err(audit_err)?;
-                rec.plan.steps[i].status = StepStatus::Skipped;
-                halted = true;
-                outcomes.push(StepOutcome {
-                    sequence: step.sequence,
-                    capability_id: m.id.clone(),
-                    status: "Denied".into(),
-                    policy: Some("deny".into()),
-                    detail: reason.clone(),
-                });
-                continue;
-            }
-
-            audit
-                .record(AuditEventType::CapabilityInvoked {
-                    capability_id: m.id.clone(),
-                    args: step.args.clone(),
-                    risk_tier: format!("{:?}", m.risk_tier),
-                })
-                .await
-                .map_err(audit_err)?;
-            rec.plan.steps[i].status = StepStatus::Executing;
-
-            let ctx = ExecutionContext::new(audit.session_id(), rec.host.clone())
-                .with_timeout_ms(step_timeout_ms);
-            let t0 = Instant::now();
-            let result = match tokio::time::timeout(
-                Duration::from_millis(step_timeout_ms),
-                cap.invoke(step.args.clone(), &ctx),
-            )
-            .await
-            {
-                Ok(r) => r,
-                Err(_) => {
-                    CapabilityResult::failure(format!("timed out after {step_timeout_ms}ms"), true)
-                }
-            };
-            let duration_ms = t0.elapsed().as_millis() as u64;
-
-            match result {
-                CapabilityResult::Success { output } => {
-                    audit
-                        .record(AuditEventType::CapabilitySucceeded {
-                            capability_id: m.id.clone(),
-                            duration_ms,
-                        })
-                        .await
-                        .map_err(audit_err)?;
-                    rec.plan.steps[i].status = StepStatus::Completed;
-                    completed += 1;
-                    outcomes.push(StepOutcome {
-                        sequence: step.sequence,
-                        capability_id: m.id.clone(),
-                        status: "Completed".into(),
-                        policy: Some(effect_label(&decision.effect).into()),
-                        detail: output.to_string(),
-                    });
-                }
-                other => {
-                    let err = match other {
-                        CapabilityResult::Failure { error, .. } => error,
-                        _ => "capability returned a dry-run result from invoke".into(),
-                    };
-                    audit
-                        .record(AuditEventType::CapabilityFailed {
-                            capability_id: m.id.clone(),
-                            error: err.clone(),
-                        })
-                        .await
-                        .map_err(audit_err)?;
-                    rec.plan.steps[i].status = StepStatus::Failed;
-                    halted = true;
-                    outcomes.push(StepOutcome {
-                        sequence: step.sequence,
-                        capability_id: m.id.clone(),
-                        status: "Failed".into(),
-                        policy: Some(effect_label(&decision.effect).into()),
-                        detail: err,
-                    });
-                }
-            }
-        }
+        let halted = report.halted;
+        let outcomes: Vec<StepOutcome> = report
+            .steps
+            .iter()
+            .map(|s| StepOutcome {
+                sequence: s.sequence,
+                capability_id: s.capability_id.clone(),
+                status: s.state.to_string(),
+                policy: s.policy.clone(),
+                detail: match &s.rollback {
+                    Some(rb) => format!("{} (rollback: {rb})", s.detail),
+                    None => s.detail.clone(),
+                },
+            })
+            .collect();
 
         audit
             .record(AuditEventType::SessionCompleted {
-                duration_ms: started.elapsed().as_millis() as u64,
-                capabilities_executed: completed as u64,
+                duration_ms: report.duration_ms,
+                capabilities_executed: report.count(StepState::Completed) as u64,
             })
             .await
             .map_err(audit_err)?;
@@ -297,6 +197,7 @@ pub async fn execute_approved_plan(
             if let Some(ex) = rec.execution.as_mut() {
                 ex.finished_at = Some(finished_at);
                 ex.steps_completed = count("Completed");
+                ex.steps_rolled_back = count("RolledBack");
                 ex.steps_failed = count("Failed") + count("Denied");
                 ex.steps_skipped = count("Skipped");
             }

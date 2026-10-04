@@ -33,6 +33,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Tab::Plan => render_plan_tab(frame, chunks[2], app),
         Tab::Execution => render_execution_tab(frame, chunks[2], app),
         Tab::Audit => render_audit_tab(frame, chunks[2], app),
+        Tab::Gate => render_gate_tab(frame, chunks[2], app),
     }
 
     render_status_bar(frame, chunks[3], app);
@@ -417,10 +418,91 @@ fn render_audit_tab(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(paragraph, area);
 }
 
+/// Lines shown on the Gate tab.  Kept separate from rendering so the content
+/// can be tested without a terminal.
+pub fn gate_tab_lines(view: &crate::gate_view::GateView) -> Vec<String> {
+    use crate::gate_view::Confirm;
+
+    let mut lines = vec![format!(
+        "State dir: {}   {} plan(s), {} awaiting approval",
+        view.state_dir().display(),
+        view.plans.len(),
+        view.pending_count()
+    )];
+    lines.push(String::new());
+    if view.plans.is_empty() {
+        lines.push("No plans. Agents propose plans through `sentinel serve --mcp`.".into());
+    }
+    for (i, p) in view.plans.iter().enumerate() {
+        lines.push(format!(
+            "{} {}  {:<16} risk {:<8} {} step(s)  {}",
+            if i == view.selected { ">" } else { " " },
+            &p.plan.id.to_string()[..8],
+            p.status.to_string(),
+            p.plan.overall_risk.to_string(),
+            p.plan.steps.len(),
+            p.plan.goal
+        ));
+    }
+    if let Some(p) = view.selected_plan() {
+        lines.push(String::new());
+        lines.push(format!("Plan {}", p.plan.id));
+        lines.push(format!(
+            "  Host: {}   Proposed: {} via {}",
+            p.host, p.proposed_at, p.proposed_via
+        ));
+        lines.push(format!(
+            "  Hash: {}   Integrity: {}",
+            p.content_hash,
+            if p.integrity_ok() {
+                "ok"
+            } else {
+                "FAILED (content changed after proposal)"
+            }
+        ));
+        for s in &p.plan.steps {
+            lines.push(format!(
+                "  {}. {} [{}] args={}",
+                s.sequence, s.capability_id, s.risk_tier, s.args
+            ));
+            lines.push(format!("     {}", s.description));
+        }
+    }
+    lines.push(String::new());
+    match &view.confirm {
+        Some(Confirm::Approve { plan_id, typed }) => lines.push(format!(
+            "APPROVE {plan_id}? Type the first 8 characters of the plan id, then Enter (Esc cancels): {typed}_"
+        )),
+        Some(Confirm::Reject { plan_id }) => {
+            lines.push(format!("REJECT {plan_id}? Press y to confirm, any other key cancels."))
+        }
+        None => {}
+    }
+    if let Some(msg) = &view.message {
+        lines.push(msg.clone());
+    }
+    lines
+}
+
+fn render_gate_tab(frame: &mut Frame, area: Rect, app: &App) {
+    let text = gate_tab_lines(&app.gate).join("\n");
+    let paragraph = Paragraph::new(text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Gate: plans proposed over MCP "),
+        )
+        .wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, area);
+}
+
 fn render_status_bar(frame: &mut Frame, area: Rect, app: &App) {
     let status = app.status_message.as_deref().unwrap_or("Ready");
-    let shortcuts =
-        "[Tab] tab  [q] quit  [a] approve-all  [s] approve-step  [r] reject  [j/k] scroll";
+    let shortcuts = if app.current_tab == Tab::Gate {
+        "[Tab] tab  [q] quit  [a] approve  [x] reject  [r] reload  [j/k] select"
+    } else {
+        "[Tab] tab  [q] quit  [a] approve-all  [s] approve-step  [r] reject  [j/k] scroll"
+    };
     let content = format!(" {}  |  {}", status, shortcuts);
 
     let paragraph = Paragraph::new(content)
@@ -506,4 +588,63 @@ fn format_session_audit(session: &Session) -> String {
         ));
     }
     out
+}
+
+#[cfg(test)]
+mod gate_tab_tests {
+    use super::*;
+    use crate::gate_view::GateView;
+
+    #[test]
+    fn empty_gate_tab_explains_where_plans_come_from() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut view = GateView::new(dir.path().to_path_buf());
+        view.refresh();
+        let text = gate_tab_lines(&view).join("\n");
+        assert!(text.contains("0 plan(s), 0 awaiting approval"), "{text}");
+        assert!(text.contains("sentinel serve --mcp"), "{text}");
+    }
+
+    #[test]
+    fn gate_tab_shows_plan_details_and_integrity() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut plan =
+            sentinel_core::Plan::new(uuid::Uuid::new_v4(), "free disk".into(), "r".into());
+        plan.add_step(sentinel_core::PlanStep::new(
+            1,
+            "log_vacuum",
+            serde_json::json!({"log_dir": "/var/log/app", "older_than_days": 7}),
+            "vacuum old logs",
+            RiskTier::Medium,
+        ));
+        let id = plan.id;
+        let store = sentinel_mcp::PlanStore::open(dir.path()).unwrap();
+        let mut rec =
+            sentinel_mcp::StoredPlan::new_pending(plan, "db-1", uuid::Uuid::new_v4(), None);
+        store.save(&rec).unwrap();
+
+        let mut view = GateView::new(dir.path().to_path_buf());
+        view.refresh();
+        let text = gate_tab_lines(&view).join("\n");
+        for expected in [
+            &id.to_string()[..8],
+            "PendingApproval",
+            "free disk",
+            "log_vacuum",
+            "/var/log/app",
+            "vacuum old logs",
+            "db-1",
+            "Integrity: ok",
+        ] {
+            assert!(text.contains(expected), "missing {expected:?} in:\n{text}");
+        }
+
+        // A plan edited after proposal is flagged before anyone approves it.
+        rec.plan.steps[0].args = serde_json::json!({"log_dir": "/", "older_than_days": 0});
+        store.save(&rec).unwrap();
+        view.refresh();
+        assert!(gate_tab_lines(&view)
+            .join("\n")
+            .contains("Integrity: FAILED"));
+    }
 }
