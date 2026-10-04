@@ -262,7 +262,7 @@ impl Capability for LogVacuum {
         // Landlock allowlist must all see the same collapsed path, or a
         // caller-supplied `app//`/`app/./` variant splits the boundary (gate r1)
         let Some(log_dir_norm) = normalise_components(log_dir) else {
-            return CapabilityResult::failure("'log_dir' must not contain '..'".into(), false);
+            return CapabilityResult::failure("'log_dir' must not contain '..'", false);
         };
         let log_dir: &str = &log_dir_norm;
         let days = args["older_than_days"].as_f64().unwrap() as i64;
