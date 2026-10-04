@@ -412,11 +412,6 @@ mod seccomp {
         }
 
         #[cfg(test)]
-        pub fn len(&self) -> usize {
-            self.prog.len as usize
-        }
-
-        #[cfg(test)]
         pub fn insns(&self) -> &[libc::sock_filter] {
             &self._insns
         }
