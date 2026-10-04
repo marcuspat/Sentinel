@@ -313,9 +313,8 @@ impl Capability for LogVacuum {
             .stdout
             .split('\0')
             .filter(|p| !p.is_empty())
-            .filter_map(|p| normalise_components(p))
+            .filter_map(normalise_components)
             .filter(|p| p.starts_with(&prefix))
-            .map(String::from)
             .collect();
 
         let mut removed = 0usize;
