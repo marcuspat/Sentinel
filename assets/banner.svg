@@ -93,7 +93,7 @@
 <rect x="-462" y="-72" width="104" height="30" rx="15" fill="none" stroke="#f85149" stroke-width="2">
 <animate attributeName="stroke" calcMode="discrete" values="#f85149;#3fb950;#f85149" keyTimes="0;0.5;0.85" dur="7s" repeatCount="indefinite"/>
 </rect>
-<text x="-410" y="-52" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="14" text-anchor="middle" fill="#f85149">DENY<animate attributeName="fill" calcMode="discrete" values="#f85149;#3fb950;#f85149" keyTimes="0;0.5;0.85" dur="7s" repeatCount="indefinite"/></text>
+<text x="-410" y="-52" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="14" text-anchor="middle" fill="#f85149">DENY<animate attributeName="opacity" calcMode="discrete" values="1;1;0" keyTimes="0;0.5;0.85" dur="7s" repeatCount="indefinite"/></text>
 <text x="-410" y="-52" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="14" text-anchor="middle" fill="#3fb950" opacity="0">ALLOW<animate attributeName="opacity" calcMode="discrete" values="0;1;0" keyTimes="0;0.5;0.85" dur="7s" repeatCount="indefinite"/></text>
 </g>
 <g font-family="ui-monospace,Menlo,Consolas,monospace" stroke="#d29922" fill="none">
