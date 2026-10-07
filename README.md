@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/banner.svg" alt="Sentinel — animated banner" width="100%"></p>
+
 # Sentinel
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
