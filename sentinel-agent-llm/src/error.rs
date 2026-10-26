@@ -32,5 +32,5 @@ pub enum AgentError {
     Serialization(#[from] serde_json::Error),
 
     #[error("Core error: {0}")]
-    Core(#[from] sentinel_core::CoreError),
+    Core(#[from] sentinel_sysadmin_core::CoreError),
 }

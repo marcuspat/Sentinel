@@ -19,7 +19,7 @@ use sentinel_agent_llm::{
 };
 use sentinel_audit::AuditLog;
 use sentinel_capabilities::all_capabilities;
-use sentinel_core::{ApprovalDecision, SessionPhase};
+use sentinel_sysadmin_core::{ApprovalDecision, SessionPhase};
 use sentinel_exec::HardenedExecutor;
 
 use crate::app::{
@@ -320,11 +320,11 @@ async fn log_entry(tx: &mpsc::Sender<SessionUpdate>, level: LogLevel, message: S
     .await;
 }
 
-/// Convert a [`sentinel_core::Plan`] into the TUI's [`Plan`] representation.
+/// Convert a [`sentinel_sysadmin_core::Plan`] into the TUI's [`Plan`] representation.
 ///
 /// Step UUIDs are preserved so that subsequent [`SessionUpdate::StepCompleted`]
 /// messages can be matched back to the displayed plan.
-fn core_plan_to_app(plan: &sentinel_core::Plan) -> Plan {
+fn core_plan_to_app(plan: &sentinel_sysadmin_core::Plan) -> Plan {
     let steps = plan
         .steps
         .iter()
@@ -348,17 +348,17 @@ fn core_plan_to_app(plan: &sentinel_core::Plan) -> Plan {
     }
 }
 
-/// Map a [`sentinel_core::StepStatus`] to the TUI's [`StepStatus`].
-fn core_status_to_app(status: &sentinel_core::StepStatus) -> StepStatus {
+/// Map a [`sentinel_sysadmin_core::StepStatus`] to the TUI's [`StepStatus`].
+fn core_status_to_app(status: &sentinel_sysadmin_core::StepStatus) -> StepStatus {
     match status {
-        sentinel_core::StepStatus::Pending
-        | sentinel_core::StepStatus::Approved
-        | sentinel_core::StepStatus::Executing => StepStatus::Running,
-        sentinel_core::StepStatus::Completed => StepStatus::Succeeded,
-        sentinel_core::StepStatus::Failed => StepStatus::Failed {
+        sentinel_sysadmin_core::StepStatus::Pending
+        | sentinel_sysadmin_core::StepStatus::Approved
+        | sentinel_sysadmin_core::StepStatus::Executing => StepStatus::Running,
+        sentinel_sysadmin_core::StepStatus::Completed => StepStatus::Succeeded,
+        sentinel_sysadmin_core::StepStatus::Failed => StepStatus::Failed {
             reason: "execution error".to_string(),
         },
-        sentinel_core::StepStatus::RolledBack => StepStatus::RolledBack,
-        sentinel_core::StepStatus::Skipped => StepStatus::Skipped,
+        sentinel_sysadmin_core::StepStatus::RolledBack => StepStatus::RolledBack,
+        sentinel_sysadmin_core::StepStatus::Skipped => StepStatus::Skipped,
     }
 }

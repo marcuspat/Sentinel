@@ -8,7 +8,7 @@
 //!
 //! [`PolicyDecision`]: crate::evaluator::PolicyDecision
 
-use sentinel_core::CapabilityKind;
+use sentinel_sysadmin_core::CapabilityKind;
 use serde::{Deserialize, Serialize};
 
 use crate::evaluator::PolicyRequest;
@@ -249,7 +249,7 @@ pub fn default_resource_guards() -> Vec<ResourceGuard> {
 mod tests {
     use super::*;
     use chrono::TimeZone;
-    use sentinel_core::{CapabilityKind, RiskTier};
+    use sentinel_sysadmin_core::{CapabilityKind, RiskTier};
     use uuid::Uuid;
 
     fn make_request_with_args(

@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use chrono::{TimeZone, Utc};
 use proptest::prelude::*;
-use sentinel_core::{CapabilityKind, RiskTier};
+use sentinel_sysadmin_core::{CapabilityKind, RiskTier};
 use sentinel_policy::resource_guard::{default_resource_guards, normalise_path, normalise_unit};
 use sentinel_policy::{
     default_policy, KillSwitch, PolicyEffect, PolicyEvaluator, PolicyRequest, PolicyRule,

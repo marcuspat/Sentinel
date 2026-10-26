@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use sentinel_core::{CapabilityKind, RiskTier};
+use sentinel_sysadmin_core::{CapabilityKind, RiskTier};
 
 use crate::{
     evaluator::PolicyEvaluator,
@@ -166,7 +166,7 @@ mod tests {
     use super::*;
     use crate::evaluator::{PolicyEffect, PolicyRequest};
     use chrono::TimeZone;
-    use sentinel_core::{CapabilityKind, RiskTier};
+    use sentinel_sysadmin_core::{CapabilityKind, RiskTier};
     use uuid::Uuid;
 
     fn req(cap_id: &str, kind: CapabilityKind, risk: RiskTier) -> PolicyRequest {

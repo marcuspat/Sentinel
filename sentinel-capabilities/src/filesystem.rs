@@ -41,7 +41,7 @@ fn validate_safe_path(path: &str) -> Result<(), CoreError> {
     Ok(())
 }
 
-use sentinel_core::{
+use sentinel_sysadmin_core::{
     Capability, CapabilityKind, CapabilityManifest, CapabilityResult, CoreError, ExecutionContext,
     RiskTier,
 };
@@ -63,7 +63,7 @@ impl DiskUsage {
                 description: "Reports disk space usage for a path using df and du.".into(),
                 kind: CapabilityKind::ReadOnly,
                 risk_tier: RiskTier::Low,
-                resource_impact: sentinel_core::capability::ResourceImpact {
+                resource_impact: sentinel_sysadmin_core::capability::ResourceImpact {
                     io_intensive: true,
                     ..Default::default()
                 },
@@ -181,7 +181,7 @@ impl LogVacuum {
                 description: "Removes log files older than a given number of days.".into(),
                 kind: CapabilityKind::Mutating,
                 risk_tier: RiskTier::Medium,
-                resource_impact: sentinel_core::capability::ResourceImpact {
+                resource_impact: sentinel_sysadmin_core::capability::ResourceImpact {
                     io_intensive: true,
                     ..Default::default()
                 },
@@ -392,7 +392,7 @@ impl CachePrune {
                 description: "Clears package manager and user-specified cache directories.".into(),
                 kind: CapabilityKind::Mutating,
                 risk_tier: RiskTier::Medium,
-                resource_impact: sentinel_core::capability::ResourceImpact {
+                resource_impact: sentinel_sysadmin_core::capability::ResourceImpact {
                     io_intensive: true,
                     ..Default::default()
                 },

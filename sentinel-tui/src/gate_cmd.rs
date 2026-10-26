@@ -19,7 +19,7 @@ use sentinel_mcp::{
     default_state_dir, execute_approved_plan_with, index_capabilities, plan_status_json, AuditSink,
     Gate, GateConfig, PlanStatus, PlanStore, StoredPlan,
 };
-use sentinel_tui::policy_source;
+use sentinel_sysadmin::policy_source;
 
 fn resolve_state_dir(state_dir: Option<PathBuf>) -> PathBuf {
     state_dir.unwrap_or_else(default_state_dir)
@@ -162,7 +162,7 @@ pub async fn execute(
     let audit = AuditSink::create(&state_dir, "execute")?;
     let opts = sentinel_mcp::RunOptions {
         step_timeout_ms: Some(step_timeout_ms),
-        rollback: sentinel_tui::runtime_opts::rollback_enabled(),
+        rollback: sentinel_sysadmin::runtime_opts::rollback_enabled(),
         stub_unimplemented: false,
     };
     let report = execute_approved_plan_with(&store, plan_id, &caps, &policy, &audit, &opts).await?;

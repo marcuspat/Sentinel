@@ -16,7 +16,7 @@ use tokio::process::Command;
 use tokio::time::Instant;
 use tracing::{debug, warn};
 
-use sentinel_core::ExecutionContext;
+use sentinel_sysadmin_core::ExecutionContext;
 
 use crate::error::ExecError;
 use crate::output_capture::OutputCapture;
@@ -748,7 +748,7 @@ impl CommandExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sentinel_core::ExecutionContext;
+    use sentinel_sysadmin_core::ExecutionContext;
     use uuid::Uuid;
 
     fn make_ctx() -> ExecutionContext {

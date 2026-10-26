@@ -2534,7 +2534,7 @@ dependencies = [
  "reqwest",
  "sentinel-audit",
  "sentinel-capabilities",
- "sentinel-core",
+ "sentinel-sysadmin-core",
  "sentinel-exec",
  "sentinel-policy",
  "sentinel-runner",
@@ -2560,7 +2560,7 @@ dependencies = [
  "hex",
  "prometheus",
  "proptest",
- "sentinel-core",
+ "sentinel-sysadmin-core",
  "serde",
  "serde_json",
  "sha2",
@@ -2578,7 +2578,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "mockall",
- "sentinel-core",
+ "sentinel-sysadmin-core",
  "sentinel-exec",
  "serde",
  "serde_json",
@@ -2590,7 +2590,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "sentinel-core"
+name = "sentinel-sysadmin-core"
 version = "0.2.0"
 dependencies = [
  "async-trait",
@@ -2612,7 +2612,7 @@ dependencies = [
  "async-trait",
  "libc",
  "nix 0.27.1",
- "sentinel-core",
+ "sentinel-sysadmin-core",
  "serde",
  "serde_json",
  "tempfile",
@@ -2632,7 +2632,7 @@ dependencies = [
  "rcgen",
  "rustls",
  "sentinel-audit",
- "sentinel-core",
+ "sentinel-sysadmin-core",
  "sentinel-policy",
  "serde",
  "serde_json",
@@ -2656,7 +2656,7 @@ dependencies = [
  "proptest",
  "sentinel-audit",
  "sentinel-capabilities",
- "sentinel-core",
+ "sentinel-sysadmin-core",
  "sentinel-exec",
  "sentinel-policy",
  "sentinel-runner",
@@ -2678,7 +2678,7 @@ dependencies = [
  "chrono",
  "criterion",
  "proptest",
- "sentinel-core",
+ "sentinel-sysadmin-core",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -2695,7 +2695,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "sentinel-audit",
- "sentinel-core",
+ "sentinel-sysadmin-core",
  "sentinel-policy",
  "serde",
  "serde_json",
@@ -2706,7 +2706,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "sentinel-tui"
+name = "sentinel-sysadmin"
 version = "0.2.0"
 dependencies = [
  "anyhow",
@@ -2718,7 +2718,7 @@ dependencies = [
  "sentinel-agent-llm",
  "sentinel-audit",
  "sentinel-capabilities",
- "sentinel-core",
+ "sentinel-sysadmin-core",
  "sentinel-exec",
  "sentinel-fleet",
  "sentinel-mcp",

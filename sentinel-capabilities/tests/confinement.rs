@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use sentinel_capabilities::filesystem::{DiskUsage, LogVacuum};
-use sentinel_core::{Capability, CapabilityResult, ExecutionContext};
+use sentinel_sysadmin_core::{Capability, CapabilityResult, ExecutionContext};
 use sentinel_exec::{apply_sandbox, HardenedExecutor, LandlockMode, SandboxConfig};
 use serde_json::json;
 use uuid::Uuid;

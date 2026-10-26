@@ -13,14 +13,14 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use sentinel_audit::{AuditEventType, AuditLog};
 use sentinel_capabilities::all_capabilities;
-use sentinel_core::{CapabilityResult, ExecutionContext};
+use sentinel_sysadmin_core::{CapabilityResult, ExecutionContext};
 use sentinel_exec::HardenedExecutor;
 use sentinel_fleet::{
     execute_on_fleet_with, validate_capability_id, FleetConfig, HostConfig, SshHostExecutor,
 };
 use sentinel_mcp::{default_state_dir, index_capabilities, AuditSink};
 use sentinel_policy::{PolicyEffect, PolicyRequest};
-use sentinel_tui::policy_source;
+use sentinel_sysadmin::policy_source;
 use uuid::Uuid;
 
 /// Wall-clock limit for one capability on the host side.
@@ -173,7 +173,7 @@ pub enum HostDecision {
 /// Controller-side policy check for every host.
 pub fn decide_hosts(
     policy: &sentinel_policy::PolicyEvaluator,
-    manifest: &sentinel_core::CapabilityManifest,
+    manifest: &sentinel_sysadmin_core::CapabilityManifest,
     args: &serde_json::Value,
     hosts: &[HostConfig],
     session_id: Uuid,

@@ -8,7 +8,7 @@ authors.workspace = true
 description = "MCP (Model Context Protocol) policy gate for Sentinel: lets coding agents query policy, run read-only investigations, and propose plans that only an operator can approve"
 
 [dependencies]
-sentinel-core = { workspace = true }
+sentinel-sysadmin-core = { workspace = true }
 sentinel-policy = { workspace = true }
 sentinel-audit = { workspace = true }
 sentinel-runner = { workspace = true }

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use sentinel_core::{Capability, CapabilityManifest};
+use sentinel_sysadmin_core::{Capability, CapabilityManifest};
 use sentinel_exec::CommandExecutorTrait;
 
 /// A registry that maps capability IDs to capability implementations.

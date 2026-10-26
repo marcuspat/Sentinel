@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-sentinel-core = { workspace = true }
+sentinel-sysadmin-core = { workspace = true }
 sentinel-policy = { workspace = true }
 sentinel-audit = { workspace = true }
 sentinel-runner = { workspace = true }

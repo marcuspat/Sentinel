@@ -20,7 +20,7 @@ use tokio::process::Command;
 use tokio::task::JoinSet;
 use tracing::{debug, warn};
 
-use sentinel_core::{CapabilityResult, ExecutionContext};
+use sentinel_sysadmin_core::{CapabilityResult, ExecutionContext};
 
 /// Connection details for a single fleet host.
 #[derive(Debug, Clone, PartialEq, Eq)]

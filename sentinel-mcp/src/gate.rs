@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use sentinel_audit::AuditEventType;
-use sentinel_core::{
+use sentinel_sysadmin_core::{
     Capability, CapabilityKind, CapabilityResult, ExecutionContext, Plan, PlanStep,
 };
 use sentinel_policy::{PolicyDecision, PolicyEffect, PolicyEvaluator, PolicyRequest};

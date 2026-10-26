@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use sentinel_core::{CapabilityKind, RiskTier};
+use sentinel_sysadmin_core::{CapabilityKind, RiskTier};
 use serde_json::Value;
 use tracing::{debug, warn};
 use uuid::Uuid;
@@ -342,7 +342,7 @@ mod tests {
     use super::*;
     use crate::rules::RuleCondition;
     use chrono::TimeZone;
-    use sentinel_core::{CapabilityKind, RiskTier};
+    use sentinel_sysadmin_core::{CapabilityKind, RiskTier};
     use uuid::Uuid;
 
     fn make_request(cap_id: &str, kind: CapabilityKind, risk: RiskTier) -> PolicyRequest {

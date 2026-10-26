@@ -6,7 +6,7 @@
 //! the LLM to respond in structured JSON so the rest of the pipeline can parse
 //! the output deterministically.
 
-use sentinel_core::{CapabilityManifest, RiskTier};
+use sentinel_sysadmin_core::{CapabilityManifest, RiskTier};
 
 use crate::planner::Observation;
 use crate::untrusted::{spotlight, DEFAULT_OBSERVATION_BUDGET, SPOTLIGHT_INSTRUCTIONS};
@@ -260,13 +260,13 @@ If not, request the next capability invocation:
     /// into prompts. The prompt-injection tripwire scans this full payload,
     /// a superset of the truncated prefix any prompt embeds, so audit
     /// events can flag attempts the model never saw.
-    pub fn capability_result_payload(result: &sentinel_core::CapabilityResult) -> String {
+    pub fn capability_result_payload(result: &sentinel_sysadmin_core::CapabilityResult) -> String {
         match result {
-            sentinel_core::CapabilityResult::Success { output } => {
+            sentinel_sysadmin_core::CapabilityResult::Success { output } => {
                 serde_json::to_string_pretty(output).unwrap_or_default()
             }
-            sentinel_core::CapabilityResult::Failure { error, .. } => error.clone(),
-            sentinel_core::CapabilityResult::DryRun { predicted_effect } => {
+            sentinel_sysadmin_core::CapabilityResult::Failure { error, .. } => error.clone(),
+            sentinel_sysadmin_core::CapabilityResult::DryRun { predicted_effect } => {
                 serde_json::to_string_pretty(predicted_effect).unwrap_or_default()
             }
         }
@@ -275,9 +275,9 @@ If not, request the next capability invocation:
     /// Status label and raw (untrusted) payload text for an observation.
     fn observation_payload(obs: &Observation) -> (&'static str, String) {
         let label = match &obs.result {
-            sentinel_core::CapabilityResult::Success { .. } => "OK",
-            sentinel_core::CapabilityResult::Failure { .. } => "FAILED",
-            sentinel_core::CapabilityResult::DryRun { .. } => "DRY-RUN",
+            sentinel_sysadmin_core::CapabilityResult::Success { .. } => "OK",
+            sentinel_sysadmin_core::CapabilityResult::Failure { .. } => "FAILED",
+            sentinel_sysadmin_core::CapabilityResult::DryRun { .. } => "DRY-RUN",
         };
         (label, Self::capability_result_payload(&obs.result))
     }
@@ -316,7 +316,7 @@ If not, request the next capability invocation:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sentinel_core::{CapabilityKind, CapabilityManifest, RiskTier};
+    use sentinel_sysadmin_core::{CapabilityKind, CapabilityManifest, RiskTier};
 
     #[test]
     fn budgets_pin_planning_4kb_and_investigation_2kb() {
@@ -328,7 +328,7 @@ mod tests {
         let obs = Observation::new(
             "disk_usage",
             serde_json::json!({}),
-            sentinel_core::CapabilityResult::success(serde_json::json!({ "blob": payload })),
+            sentinel_sysadmin_core::CapabilityResult::success(serde_json::json!({ "blob": payload })),
         );
 
         let planning =
@@ -409,7 +409,7 @@ mod tests {
     #[test]
     fn planning_user_with_observation() {
         use crate::planner::Observation;
-        use sentinel_core::CapabilityResult;
+        use sentinel_sysadmin_core::CapabilityResult;
 
         let obs = Observation {
             id: uuid::Uuid::new_v4(),
@@ -435,7 +435,7 @@ mod tests {
     #[test]
     fn investigation_turn_with_observations() {
         use crate::planner::Observation;
-        use sentinel_core::CapabilityResult;
+        use sentinel_sysadmin_core::CapabilityResult;
 
         let obs = Observation {
             id: uuid::Uuid::new_v4(),
@@ -494,7 +494,7 @@ mod tests {
     #[test]
     fn observations_are_spotlighted_and_multibyte_safe() {
         use crate::planner::Observation;
-        use sentinel_core::CapabilityResult;
+        use sentinel_sysadmin_core::CapabilityResult;
 
         // Multi-byte payload straddling the old 2 000-byte cut used to panic.
         let payload = format!("{}é{}", "a".repeat(1_998), "b".repeat(5_000));
@@ -514,7 +514,7 @@ mod tests {
     #[test]
     fn injected_fence_in_observation_is_neutralised() {
         use crate::planner::Observation;
-        use sentinel_core::CapabilityResult;
+        use sentinel_sysadmin_core::CapabilityResult;
 
         let obs = Observation::new(
             "process_list",

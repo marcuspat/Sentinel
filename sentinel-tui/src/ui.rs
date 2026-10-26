@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
 };
 
-use sentinel_core::RiskTier;
+use sentinel_sysadmin_core::RiskTier;
 
 use crate::app::{App, LogLevel, PlanStep, Session, StepStatus, Tab};
 
@@ -609,8 +609,8 @@ mod gate_tab_tests {
     fn gate_tab_shows_plan_details_and_integrity() {
         let dir = tempfile::tempdir().unwrap();
         let mut plan =
-            sentinel_core::Plan::new(uuid::Uuid::new_v4(), "free disk".into(), "r".into());
-        plan.add_step(sentinel_core::PlanStep::new(
+            sentinel_sysadmin_core::Plan::new(uuid::Uuid::new_v4(), "free disk".into(), "r".into());
+        plan.add_step(sentinel_sysadmin_core::PlanStep::new(
             1,
             "log_vacuum",
             serde_json::json!({"log_dir": "/var/log/app", "older_than_days": 7}),

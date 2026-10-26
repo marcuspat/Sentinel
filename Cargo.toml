@@ -89,7 +89,7 @@ tempfile = "3.9"
 wiremock = "0.6"
 
 # Workspace crates
-sentinel-core = { path = "sentinel-core", version = "0.2.0" }
+sentinel-sysadmin-core = { path = "sentinel-core", version = "0.2.0" }
 sentinel-exec = { path = "sentinel-exec", version = "0.2.0" }
 sentinel-policy = { path = "sentinel-policy", version = "0.2.0" }
 sentinel-capabilities = { path = "sentinel-capabilities", version = "0.2.0" }

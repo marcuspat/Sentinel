@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 use uuid::Uuid;
 
-use sentinel_core::{CapabilityManifest, CapabilityResult, Plan, PlanStep, RiskTier};
+use sentinel_sysadmin_core::{CapabilityManifest, CapabilityResult, Plan, PlanStep, RiskTier};
 
 use crate::error::AgentError;
 
@@ -18,7 +18,7 @@ use crate::error::AgentError;
 
 /// A single system observation recorded during the Investigating phase.
 ///
-/// This is a local mirror of `sentinel_core::session::Observation` so that
+/// This is a local mirror of `sentinel_sysadmin_core::session::Observation` so that
 /// the agent-llm crate can operate without importing the full session module.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Observation {
@@ -343,7 +343,7 @@ impl PlanParser {
                 requires_approval: manifest.risk_tier >= RiskTier::High,
                 can_rollback: effective_can_rollback,
                 depends_on: Vec::new(), // index-based deps resolved by reasoning loop
-                status: sentinel_core::StepStatus::Pending,
+                status: sentinel_sysadmin_core::StepStatus::Pending,
             };
 
             plan.add_step(step);
@@ -424,7 +424,7 @@ impl PlanParser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sentinel_core::{CapabilityKind, RiskTier};
+    use sentinel_sysadmin_core::{CapabilityKind, RiskTier};
 
     fn make_registry() -> CapabilityRegistry {
         let mut registry = CapabilityRegistry::new();
@@ -455,7 +455,7 @@ mod tests {
             id: "restart_service".to_string(),
             name: "Restart Service".to_string(),
             description: "Restart a systemd service".to_string(),
-            kind: sentinel_core::CapabilityKind::Mutating,
+            kind: sentinel_sysadmin_core::CapabilityKind::Mutating,
             risk_tier: RiskTier::Medium,
             resource_impact: Default::default(),
             has_inverse: false,

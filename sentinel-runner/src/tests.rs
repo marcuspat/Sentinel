@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
-use sentinel_core::{CapabilityKind, CoreError, PlanStep, RiskTier};
+use sentinel_sysadmin_core::{CapabilityKind, CoreError, PlanStep, RiskTier};
 use sentinel_policy::default_policy;
 use serde_json::{json, Value};
 

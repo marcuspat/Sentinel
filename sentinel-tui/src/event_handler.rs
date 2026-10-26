@@ -279,7 +279,7 @@ mod tests {
     #[test]
     fn a_key_approves_all_on_plan_tab() {
         use crate::app::{Plan, PlanStep};
-        use sentinel_core::RiskTier;
+        use sentinel_sysadmin_core::RiskTier;
         let mut app = App::new();
         app.current_tab = Tab::Plan;
         let plan = Plan::new(
@@ -331,7 +331,7 @@ mod tests {
 
     fn approving_app() -> (App, tokio::sync::oneshot::Receiver<ApprovalOutcome>) {
         use crate::app::PlanStep;
-        use sentinel_core::RiskTier;
+        use sentinel_sysadmin_core::RiskTier;
         let mut app = App::new();
         let (tx, rx) = tokio::sync::oneshot::channel();
         let step = PlanStep::new(
@@ -475,13 +475,13 @@ mod tests {
     #[tokio::test]
     async fn entering_the_gate_tab_loads_plans_from_disk() {
         let dir = tempfile::tempdir().unwrap();
-        let mut plan = sentinel_core::Plan::new(uuid::Uuid::new_v4(), "g".into(), "r".into());
-        plan.add_step(sentinel_core::PlanStep::new(
+        let mut plan = sentinel_sysadmin_core::Plan::new(uuid::Uuid::new_v4(), "g".into(), "r".into());
+        plan.add_step(sentinel_sysadmin_core::PlanStep::new(
             1,
             "disk_usage",
             serde_json::json!({"path": "/"}),
             "d",
-            sentinel_core::RiskTier::Low,
+            sentinel_sysadmin_core::RiskTier::Low,
         ));
         sentinel_mcp::PlanStore::open(dir.path())
             .unwrap()

@@ -2,7 +2,7 @@
 //!
 //! The built-in capability library for the Sentinel agentic sysadmin tool.
 //!
-//! Each capability implements [`sentinel_core::Capability`] and delegates
+//! Each capability implements [`sentinel_sysadmin_core::Capability`] and delegates
 //! process execution to [`sentinel_exec::CommandExecutor`].  All capabilities
 //! are accessible via the [`CapabilityRegistry`] type or the
 //! [`all_capabilities`] factory function.
@@ -17,7 +17,7 @@ pub mod schemas;
 
 pub use registry::CapabilityRegistry;
 
-use sentinel_core::Capability;
+use sentinel_sysadmin_core::Capability;
 use sentinel_exec::CommandExecutorTrait;
 use std::sync::Arc;
 

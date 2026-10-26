@@ -33,7 +33,7 @@
 
 use std::path::Path;
 
-use sentinel_core::{CapabilityKind, RiskTier};
+use sentinel_sysadmin_core::{CapabilityKind, RiskTier};
 use serde::Deserialize;
 
 use crate::error::PolicyError;

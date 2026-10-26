@@ -1,5 +1,5 @@
 [package]
-name = "sentinel-tui"
+name = "sentinel-sysadmin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,7 +9,7 @@ name = "sentinel"
 path = "src/main.rs"
 
 [dependencies]
-sentinel-core = { workspace = true }
+sentinel-sysadmin-core = { workspace = true }
 sentinel-agent-llm = { workspace = true }
 sentinel-policy = { workspace = true }
 sentinel-audit = { workspace = true }

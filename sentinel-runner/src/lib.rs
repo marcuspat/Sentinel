@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use sentinel_audit::{AuditEventType, AuditLog};
-use sentinel_core::{
+use sentinel_sysadmin_core::{
     Capability, CapabilityManifest, CapabilityResult, ExecutionContext, Plan, StepStatus,
 };
 use sentinel_policy::{PolicyEffect, PolicyEvaluator, PolicyRequest};
