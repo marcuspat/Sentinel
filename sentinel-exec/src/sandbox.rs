@@ -165,8 +165,17 @@ pub fn apply_sandbox(
 
             setrlimit(Resource::RLIMIT_NOFILE, 256, 256).map_err(map_err)?;
             setrlimit(Resource::RLIMIT_CORE, 0, 0).map_err(map_err)?;
+            #[cfg(target_os = "linux")]
             if deny_new_processes {
                 setrlimit(Resource::RLIMIT_NPROC, 64, 64).map_err(map_err)?;
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                // RLIMIT_NPROC is Linux-only. On other platforms the
+                // deny_new_processes policy keeps its process-level
+                // enforcement via the exec allow/deny policy; this rlimit
+                // backstop degrades to a no-op rather than failing the build.
+                let _ = deny_new_processes;
             }
 
             #[cfg(target_os = "linux")]
