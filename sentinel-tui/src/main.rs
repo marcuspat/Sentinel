@@ -19,12 +19,12 @@ use sentinel_agent_llm::{
 };
 use sentinel_audit::AuditLog;
 use sentinel_capabilities::all_capabilities;
-use sentinel_core::ApprovalDecision;
 use sentinel_exec::HardenedExecutor;
 use sentinel_policy::RuleCondition;
+use sentinel_sysadmin_core::ApprovalDecision;
 use uuid::Uuid;
 
-use sentinel_tui::{
+use sentinel_sysadmin::{
     agent_bridge::{run_agent_session, AgentConfig},
     app::App,
     event_handler::{handle_events, AppEvent},
@@ -206,7 +206,7 @@ enum Commands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     policy_source::set_path(cli.policy.clone());
-    sentinel_tui::runtime_opts::set_no_rollback(cli.no_rollback);
+    sentinel_sysadmin::runtime_opts::set_no_rollback(cli.no_rollback);
 
     // Logs always go to stderr: stdout is reserved for command output and,
     // under `serve --mcp`, for the JSON-RPC stream.
@@ -464,7 +464,7 @@ async fn run_agent(
         policy,
         Arc::clone(&audit),
         ReasoningConfig {
-            rollback_on_failure: sentinel_tui::runtime_opts::rollback_enabled(),
+            rollback_on_failure: sentinel_sysadmin::runtime_opts::rollback_enabled(),
             ..ReasoningConfig::default()
         },
     )

@@ -16,9 +16,9 @@ use sentinel_agent_llm::{
 };
 use sentinel_audit::AuditLog;
 use sentinel_capabilities::all_capabilities;
-use sentinel_core::{ApprovalDecision, CapabilityManifest, RiskTier};
 use sentinel_exec::{CommandExecutorTrait, CommandOutput, ExecError};
 use sentinel_policy::{KillSwitch, PolicyEvaluator, PolicyRule, RuleEffect};
+use sentinel_sysadmin_core::{ApprovalDecision, CapabilityManifest, RiskTier};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -148,7 +148,9 @@ fn make_allow_all_policy() -> Arc<PolicyEvaluator> {
     ))
 }
 
-fn make_registry_from_caps(caps: &[Box<dyn sentinel_core::Capability>]) -> Arc<CapabilityRegistry> {
+fn make_registry_from_caps(
+    caps: &[Box<dyn sentinel_sysadmin_core::Capability>],
+) -> Arc<CapabilityRegistry> {
     let mut registry = CapabilityRegistry::new();
     for cap in caps {
         registry.register(cap.manifest().clone());
@@ -207,7 +209,7 @@ async fn integration_investigate_calls_real_capability() {
 
     // Observation should be a real success (not stub).
     assert!(observations[0].result.is_success());
-    if let sentinel_core::CapabilityResult::Success { output } = &observations[0].result {
+    if let sentinel_sysadmin_core::CapabilityResult::Success { output } = &observations[0].result {
         // Real DiskUsage returns df_output and du_output, not {"stub": true}.
         assert!(
             output.get("stub").is_none(),
@@ -348,7 +350,8 @@ async fn integration_policy_deny_in_investigation() {
     assert_eq!(observations.len(), 1);
     // Observation should be a failure with "Policy denied" in the error.
     assert!(observations[0].result.is_failure());
-    if let sentinel_core::CapabilityResult::Failure { error, .. } = &observations[0].result {
+    if let sentinel_sysadmin_core::CapabilityResult::Failure { error, .. } = &observations[0].result
+    {
         assert!(
             error.contains("Policy denied"),
             "expected policy denial: {error}"
@@ -450,7 +453,7 @@ async fn integration_stub_mode_still_works() {
         id: "disk_usage".into(),
         name: "Disk Usage".into(),
         description: "Check disk".into(),
-        kind: sentinel_core::CapabilityKind::ReadOnly,
+        kind: sentinel_sysadmin_core::CapabilityKind::ReadOnly,
         risk_tier: RiskTier::Low,
         resource_impact: Default::default(),
         has_inverse: false,
@@ -475,7 +478,7 @@ async fn integration_stub_mode_still_works() {
     assert_eq!(obs.len(), 1);
     assert!(obs[0].result.is_success());
     // Stub result contains {"stub": true}
-    if let sentinel_core::CapabilityResult::Success { output } = &obs[0].result {
+    if let sentinel_sysadmin_core::CapabilityResult::Success { output } = &obs[0].result {
         assert_eq!(output["stub"], true, "expected stub result in stub mode");
     }
 }
@@ -484,11 +487,11 @@ async fn integration_stub_mode_still_works() {
 
 mod unified_executor {
     use super::*;
-    use sentinel_core::{
+    use sentinel_policy::default_policy;
+    use sentinel_sysadmin_core::{
         Capability, CapabilityKind, CapabilityManifest, CapabilityResult, CoreError,
         ExecutionContext, Plan, PlanStep, RiskTier, StepStatus,
     };
-    use sentinel_policy::default_policy;
     use std::sync::atomic::{AtomicU32, Ordering};
 
     struct Scripted {

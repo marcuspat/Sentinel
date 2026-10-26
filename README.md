@@ -46,7 +46,13 @@ hash-chained audit log.
 
 ## Install
 
-Build from source — `sentinel` isn't published to crates.io (the crate name is already taken by an unrelated project):
+From crates.io — **publishing as `sentinel-sysadmin` lands with this change** (binary stays `sentinel`; the bare name `sentinel` plus `sentinel-core`/`sentinel-tui` are taken by unrelated projects):
+
+```sh
+cargo install sentinel-sysadmin
+```
+
+Build from source:
 
 ```bash
 git clone https://github.com/marcuspat/Sentinel

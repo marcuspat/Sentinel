@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use sentinel_core::{Capability, CapabilityManifest};
+use sentinel_sysadmin_core::{Capability, CapabilityManifest};
 use serde_json::{json, Value};
 
 use crate::backend::{ToolCall, ToolResponse, ToolSpec};
@@ -202,7 +202,7 @@ fn single_call(response: &ToolResponse) -> Result<&ToolCall, AgentError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sentinel_core::{CapabilityKind, RiskTier};
+    use sentinel_sysadmin_core::{CapabilityKind, RiskTier};
 
     fn manifest(id: &str) -> CapabilityManifest {
         CapabilityManifest {

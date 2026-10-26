@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use sentinel_core::{
+use sentinel_sysadmin_core::{
     CapabilityKind, CapabilityManifest, CapabilityResult, ResourceImpact, RiskTier,
 };
 use serde_json::json;

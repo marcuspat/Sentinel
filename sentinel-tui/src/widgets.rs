@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
 };
 
-use sentinel_core::RiskTier;
+use sentinel_sysadmin_core::RiskTier;
 
 use crate::app::{PlanStepView, StepStatus};
 

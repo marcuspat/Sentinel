@@ -240,7 +240,7 @@ impl GateView {
 mod tests {
     use super::*;
     use crossterm::event::{KeyEventKind, KeyEventState, KeyModifiers};
-    use sentinel_core::{Plan, PlanStep, RiskTier};
+    use sentinel_sysadmin_core::{Plan, PlanStep, RiskTier};
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent {

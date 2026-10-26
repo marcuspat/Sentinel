@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use sentinel_core::Plan;
+use sentinel_sysadmin_core::Plan;
 
 /// Lifecycle of a plan proposed through the MCP gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,7 +114,7 @@ struct HashedStep<'a> {
     sequence: u32,
     capability_id: &'a str,
     args: &'a serde_json::Value,
-    risk_tier: sentinel_core::RiskTier,
+    risk_tier: sentinel_sysadmin_core::RiskTier,
 }
 
 #[derive(Serialize)]
@@ -456,7 +456,7 @@ pub(crate) fn restrict_dir_permissions(_dir: &Path) {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sentinel_core::{PlanStep, RiskTier};
+    use sentinel_sysadmin_core::{PlanStep, RiskTier};
 
     fn sample_plan() -> Plan {
         let mut p = Plan::new(Uuid::new_v4(), "free disk".into(), "because".into());

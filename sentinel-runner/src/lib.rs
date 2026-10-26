@@ -22,10 +22,10 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use sentinel_audit::{AuditEventType, AuditLog};
-use sentinel_core::{
+use sentinel_policy::{PolicyEffect, PolicyEvaluator, PolicyRequest};
+use sentinel_sysadmin_core::{
     Capability, CapabilityManifest, CapabilityResult, ExecutionContext, Plan, StepStatus,
 };
-use sentinel_policy::{PolicyEffect, PolicyEvaluator, PolicyRequest};
 use serde::Serialize;
 use tracing::{info, warn, Instrument};
 use uuid::Uuid;

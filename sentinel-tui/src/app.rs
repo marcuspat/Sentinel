@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
-use sentinel_core::{RiskTier, SessionPhase};
+use sentinel_sysadmin_core::{RiskTier, SessionPhase};
 
 // ── Local plan / session types ────────────────────────────────────────────────
 // These mirror what the agent-llm crate will eventually expose.  They are

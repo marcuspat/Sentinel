@@ -8,7 +8,7 @@ authors.workspace = true
 description = "The one plan executor for Sentinel: policy check, audit, timeout, halt-on-failure and rollback, shared by `sentinel run` and `sentinel execute`"
 
 [dependencies]
-sentinel-core = { workspace = true }
+sentinel-sysadmin-core = { workspace = true }
 sentinel-policy = { workspace = true }
 sentinel-audit = { workspace = true }
 async-trait = { workspace = true }
