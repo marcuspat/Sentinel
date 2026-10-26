@@ -1,5 +1,6 @@
 [package]
 name = "sentinel-policy"
+description = "Human-readable policy definitions and evaluation for the Sentinel agentic sysadmin family"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

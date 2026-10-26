@@ -1,5 +1,6 @@
 [package]
 name = "sentinel-exec"
+description = "Confined command execution for Sentinel: allow/deny policy, dry-run, and audit hooks"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

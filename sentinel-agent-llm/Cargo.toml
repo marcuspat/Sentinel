@@ -1,5 +1,6 @@
 [package]
 name = "sentinel-agent-llm"
+description = "LLM reasoning loop for Sentinel: plan, act, observe with policy-gated tool use"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -1,5 +1,6 @@
 [package]
 name = "sentinel-fleet"
+description = "Fleet mode for Sentinel: coordinate policy-gated agents across multiple hosts"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

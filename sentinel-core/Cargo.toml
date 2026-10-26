@@ -1,5 +1,6 @@
 [package]
 name = "sentinel-sysadmin-core"
+description = "Capability model, policy engine core, and shared types for the Sentinel agentic sysadmin family"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
