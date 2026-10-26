@@ -1,5 +1,6 @@
 [package]
 name = "sentinel-capabilities"
+description = "Confinement-checked sysadmin capabilities (files, processes, packages, network) for Sentinel"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

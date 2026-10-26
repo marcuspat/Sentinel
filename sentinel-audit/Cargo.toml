@@ -1,5 +1,6 @@
 [package]
 name = "sentinel-audit"
+description = "Append-only audit log and Prometheus metrics for the Sentinel agentic sysadmin family"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

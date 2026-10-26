@@ -1,5 +1,6 @@
 [package]
 name = "sentinel-sysadmin"
+description = "Sentinel: safe agentic system administration — policy-gated terminal UI and CLI (binary: sentinel)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
