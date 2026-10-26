@@ -3,11 +3,11 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::debug;
 
+use sentinel_exec::{CommandExecutorTrait, FsAccess};
 use sentinel_sysadmin_core::{
     capability::ResourceImpact, Capability, CapabilityKind, CapabilityManifest, CapabilityResult,
     CoreError, ExecutionContext, RiskTier,
 };
-use sentinel_exec::{CommandExecutorTrait, FsAccess};
 
 // ─── ProcessList ─────────────────────────────────────────────────────────────
 

@@ -17,8 +17,8 @@ pub mod schemas;
 
 pub use registry::CapabilityRegistry;
 
-use sentinel_sysadmin_core::Capability;
 use sentinel_exec::CommandExecutorTrait;
+use sentinel_sysadmin_core::Capability;
 use std::sync::Arc;
 
 /// Construct a `Vec` of every built-in capability backed by the provided

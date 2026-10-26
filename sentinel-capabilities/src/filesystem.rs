@@ -41,11 +41,11 @@ fn validate_safe_path(path: &str) -> Result<(), CoreError> {
     Ok(())
 }
 
+use sentinel_exec::{CommandExecutorTrait, FsAccess};
 use sentinel_sysadmin_core::{
     Capability, CapabilityKind, CapabilityManifest, CapabilityResult, CoreError, ExecutionContext,
     RiskTier,
 };
-use sentinel_exec::{CommandExecutorTrait, FsAccess};
 
 // ─── DiskUsage ───────────────────────────────────────────────────────────────
 

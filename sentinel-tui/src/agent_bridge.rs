@@ -19,8 +19,8 @@ use sentinel_agent_llm::{
 };
 use sentinel_audit::AuditLog;
 use sentinel_capabilities::all_capabilities;
-use sentinel_sysadmin_core::{ApprovalDecision, SessionPhase};
 use sentinel_exec::HardenedExecutor;
+use sentinel_sysadmin_core::{ApprovalDecision, SessionPhase};
 
 use crate::app::{
     ApprovalOutcome, ApprovalRequest, LogEntry, LogLevel, Plan, PlanStep, SessionUpdate, StepStatus,

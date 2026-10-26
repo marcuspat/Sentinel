@@ -475,7 +475,8 @@ mod tests {
     #[tokio::test]
     async fn entering_the_gate_tab_loads_plans_from_disk() {
         let dir = tempfile::tempdir().unwrap();
-        let mut plan = sentinel_sysadmin_core::Plan::new(uuid::Uuid::new_v4(), "g".into(), "r".into());
+        let mut plan =
+            sentinel_sysadmin_core::Plan::new(uuid::Uuid::new_v4(), "g".into(), "r".into());
         plan.add_step(sentinel_sysadmin_core::PlanStep::new(
             1,
             "disk_usage",

@@ -1,7 +1,7 @@
 use chrono::Utc;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use sentinel_sysadmin_core::{CapabilityKind, RiskTier};
 use sentinel_policy::{default_policy, PolicyRequest};
+use sentinel_sysadmin_core::{CapabilityKind, RiskTier};
 use serde_json::json;
 use uuid::Uuid;
 

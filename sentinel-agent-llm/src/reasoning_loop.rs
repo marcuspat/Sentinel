@@ -21,8 +21,8 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use sentinel_audit::{AuditEventType, AuditLog};
-use sentinel_sysadmin_core::{ApprovalDecision, Capability, ExecutionContext, Plan};
 use sentinel_policy::{PolicyEffect, PolicyEvaluator, PolicyRequest};
+use sentinel_sysadmin_core::{ApprovalDecision, Capability, ExecutionContext, Plan};
 
 use crate::backend::{LlmBackend, Message, ToolChoice};
 use crate::error::AgentError;
@@ -199,7 +199,9 @@ impl ReasoningLoop {
             log.append(AuditEventType::InvestigationStarted)
                 .await
                 .map_err(|e| {
-                    AgentError::Core(sentinel_sysadmin_core::CoreError::ExecutionFailed(e.to_string()))
+                    AgentError::Core(sentinel_sysadmin_core::CoreError::ExecutionFailed(
+                        e.to_string(),
+                    ))
                 })?;
         }
 
@@ -405,7 +407,9 @@ impl ReasoningLoop {
                             sentinel_sysadmin_core::CapabilityResult::Failure { error, .. } => {
                                 format!("failure: {error}")
                             }
-                            sentinel_sysadmin_core::CapabilityResult::DryRun { .. } => "dry-run".to_string(),
+                            sentinel_sysadmin_core::CapabilityResult::DryRun { .. } => {
+                                "dry-run".to_string()
+                            }
                         };
                         log.append(AuditEventType::ObservationRecorded {
                             capability_id: req.capability_id.clone(),
@@ -561,7 +565,9 @@ impl ReasoningLoop {
             })
             .await
             .map_err(|e| {
-                AgentError::Core(sentinel_sysadmin_core::CoreError::ExecutionFailed(e.to_string()))
+                AgentError::Core(sentinel_sysadmin_core::CoreError::ExecutionFailed(
+                    e.to_string(),
+                ))
             })?;
         }
 
@@ -620,7 +626,9 @@ impl ReasoningLoop {
                     })
                     .await
                     .map_err(|e| {
-                        AgentError::Core(sentinel_sysadmin_core::CoreError::ExecutionFailed(e.to_string()))
+                        AgentError::Core(sentinel_sysadmin_core::CoreError::ExecutionFailed(
+                            e.to_string(),
+                        ))
                     })?;
                 }
                 _ => {
@@ -630,7 +638,9 @@ impl ReasoningLoop {
                     })
                     .await
                     .map_err(|e| {
-                        AgentError::Core(sentinel_sysadmin_core::CoreError::ExecutionFailed(e.to_string()))
+                        AgentError::Core(sentinel_sysadmin_core::CoreError::ExecutionFailed(
+                            e.to_string(),
+                        ))
                     })?;
                 }
             }
@@ -703,7 +713,9 @@ impl ReasoningLoop {
             })
             .await
             .map_err(|e| {
-                AgentError::Core(sentinel_sysadmin_core::CoreError::ExecutionFailed(e.to_string()))
+                AgentError::Core(sentinel_sysadmin_core::CoreError::ExecutionFailed(
+                    e.to_string(),
+                ))
             })?;
         }
 
@@ -758,8 +770,8 @@ mod tests {
     use std::sync::Arc;
 
     use sentinel_audit::AuditLog;
-    use sentinel_sysadmin_core::{CapabilityKind, CapabilityManifest, RiskTier};
     use sentinel_policy::{KillSwitch, PolicyEvaluator, PolicyRule, RuleEffect};
+    use sentinel_sysadmin_core::{CapabilityKind, CapabilityManifest, RiskTier};
     use tokio::sync::Mutex;
 
     use crate::backend::{LlmBackend, LlmResponse, Message};
@@ -970,7 +982,9 @@ mod tests {
         assert_eq!(observations.len(), 1);
         assert!(observations[0].result.is_failure());
         // Verify the error message contains Policy denied.
-        if let sentinel_sysadmin_core::CapabilityResult::Failure { error, .. } = &observations[0].result {
+        if let sentinel_sysadmin_core::CapabilityResult::Failure { error, .. } =
+            &observations[0].result
+        {
             assert!(
                 error.contains("Policy denied"),
                 "expected 'Policy denied' in: {error}"
@@ -1150,7 +1164,10 @@ mod tests {
         ) -> sentinel_sysadmin_core::CapabilityResult {
             self.invoke(args, ctx).await
         }
-        fn validate_args(&self, _args: &serde_json::Value) -> Result<(), sentinel_sysadmin_core::CoreError> {
+        fn validate_args(
+            &self,
+            _args: &serde_json::Value,
+        ) -> Result<(), sentinel_sysadmin_core::CoreError> {
             Ok(())
         }
     }

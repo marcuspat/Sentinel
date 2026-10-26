@@ -328,7 +328,9 @@ mod tests {
         let obs = Observation::new(
             "disk_usage",
             serde_json::json!({}),
-            sentinel_sysadmin_core::CapabilityResult::success(serde_json::json!({ "blob": payload })),
+            sentinel_sysadmin_core::CapabilityResult::success(
+                serde_json::json!({ "blob": payload }),
+            ),
         );
 
         let planning =
