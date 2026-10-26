@@ -46,11 +46,15 @@ hash-chained audit log.
 
 ## Install
 
-From crates.io — **publishing as `sentinel-sysadmin` lands with this change** (binary stays `sentinel`; the bare name `sentinel` plus `sentinel-core`/`sentinel-tui` are taken by unrelated projects):
+Homebrew (macOS / Linux):
 
 ```sh
-cargo install sentinel-sysadmin
+brew install marcuspat/tap/sentinel
 ```
+
+Prebuilt binaries: grab the archive for your platform from the
+[releases page](https://github.com/marcuspat/Sentinel/releases) — release builds are
+attested and checksummed.
 
 Build from source:
 
