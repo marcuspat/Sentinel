@@ -2534,10 +2534,10 @@ dependencies = [
  "reqwest",
  "sentinel-audit",
  "sentinel-capabilities",
- "sentinel-sysadmin-core",
  "sentinel-exec",
  "sentinel-policy",
  "sentinel-runner",
+ "sentinel-sysadmin-core",
  "serde",
  "serde_json",
  "tempfile",
@@ -2578,30 +2578,14 @@ dependencies = [
  "async-trait",
  "chrono",
  "mockall",
- "sentinel-sysadmin-core",
  "sentinel-exec",
+ "sentinel-sysadmin-core",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
- "uuid",
-]
-
-[[package]]
-name = "sentinel-sysadmin-core"
-version = "0.2.0"
-dependencies = [
- "async-trait",
- "chrono",
- "criterion",
- "hex",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 1.0.69",
- "tokio",
  "uuid",
 ]
 
@@ -2632,8 +2616,8 @@ dependencies = [
  "rcgen",
  "rustls",
  "sentinel-audit",
- "sentinel-sysadmin-core",
  "sentinel-policy",
+ "sentinel-sysadmin-core",
  "serde",
  "serde_json",
  "sha2",
@@ -2656,10 +2640,10 @@ dependencies = [
  "proptest",
  "sentinel-audit",
  "sentinel-capabilities",
- "sentinel-sysadmin-core",
  "sentinel-exec",
  "sentinel-policy",
  "sentinel-runner",
+ "sentinel-sysadmin-core",
  "serde",
  "serde_json",
  "sha2",
@@ -2695,8 +2679,8 @@ dependencies = [
  "async-trait",
  "chrono",
  "sentinel-audit",
- "sentinel-sysadmin-core",
  "sentinel-policy",
+ "sentinel-sysadmin-core",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -2718,11 +2702,11 @@ dependencies = [
  "sentinel-agent-llm",
  "sentinel-audit",
  "sentinel-capabilities",
- "sentinel-sysadmin-core",
  "sentinel-exec",
  "sentinel-fleet",
  "sentinel-mcp",
  "sentinel-policy",
+ "sentinel-sysadmin-core",
  "serde",
  "serde_json",
  "tempfile",
@@ -2731,6 +2715,22 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "sentinel-sysadmin-core"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "criterion",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 1.0.69",
+ "tokio",
  "uuid",
 ]
 

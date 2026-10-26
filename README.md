@@ -46,7 +46,7 @@ hash-chained audit log.
 
 ## Install
 
-From crates.io (published as `sentinel-sysadmin` — the binary is still `sentinel`; the bare name `sentinel` and `sentinel-core`/`sentinel-tui` are taken by unrelated projects):
+From crates.io — **publishing as `sentinel-sysadmin` lands with this change** (binary stays `sentinel`; the bare name `sentinel` plus `sentinel-core`/`sentinel-tui` are taken by unrelated projects):
 
 ```sh
 cargo install sentinel-sysadmin
