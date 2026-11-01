@@ -925,9 +925,13 @@ mod tests {
             .execute("pwd", &[], &ctx)
             .await
             .expect("execute failed");
-        // /tmp may be a symlink on some systems; check prefix
+        // /tmp may be a symlink on some systems (macOS: /private/tmp); check prefix
+        let wd = result.stdout.trim();
         assert!(
-            result.stdout.trim() == "/tmp" || result.stdout.trim().starts_with("/tmp"),
+            wd == "/tmp"
+                || wd.starts_with("/tmp")
+                || wd == "/private/tmp"
+                || wd.starts_with("/private/tmp"),
             "unexpected pwd output: {}",
             result.stdout
         );
@@ -985,6 +989,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")] // asserts PR_SET_NO_NEW_PRIVS via /proc/self/status
     #[tokio::test]
     async fn hardened_runs_allowed_commands_with_no_new_privs() {
         let exec = HardenedExecutor::for_builtin_capabilities();
@@ -1264,6 +1269,7 @@ mod tests {
 
     // ── Environment scrubbing and network policy ─────────────────────────────
 
+    #[cfg(target_os = "linux")] // reads /proc/self/environ, which macOS lacks
     async fn child_environ(exec: &HardenedExecutor, env: &HashMap<String, String>) -> String {
         let out = exec
             .run("cat", &["/proc/self/environ"], env, 64 * 1024)
@@ -1273,6 +1279,7 @@ mod tests {
         out.stdout.replace('\0', "\n")
     }
 
+    #[cfg(target_os = "linux")] // via child_environ -> /proc/self/environ
     #[tokio::test]
     async fn child_environment_is_not_inherited() {
         // `cargo test` exports CARGO_* into this process; none may leak.
@@ -1288,6 +1295,7 @@ mod tests {
         assert!(environ.contains(&format!("PATH={SAFE_PATH}")));
     }
 
+    #[cfg(target_os = "linux")] // via child_environ -> /proc/self/environ
     #[tokio::test]
     async fn dangerous_overrides_are_dropped_and_safe_ones_kept() {
         let exec = HardenedExecutor::for_builtin_capabilities();
@@ -1306,6 +1314,7 @@ mod tests {
     }
 
     /// A caller cannot make an allowlisted name resolve to its own binary.
+    #[cfg(target_os = "linux")] // runs `cat /proc/uptime` — the procfs file must exist
     #[tokio::test]
     async fn path_override_cannot_hijack_an_allowlisted_command() {
         use std::os::unix::fs::PermissionsExt;
