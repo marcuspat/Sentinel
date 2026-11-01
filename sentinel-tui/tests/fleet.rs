@@ -369,7 +369,7 @@ fn fleet_skips_hosts_that_controller_policy_denies() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("prod-db: DENIED by policy"), "{stdout}");
     assert!(stdout.contains("1 denied"), "{stdout}");
-    let ssh_log = std::fs::read_to_string(dir.path().join("ssh.log")).unwrap();
+    let ssh_log = read_ssh_log(dir.path());
     assert!(
         ssh_log.contains("staging-1") && !ssh_log.contains("prod-db"),
         "{ssh_log}"
