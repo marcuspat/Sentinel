@@ -677,6 +677,7 @@ mod tests {
         assert!(!outside.exists());
     }
 
+    #[cfg(target_os = "linux")] // NoNewPrivs is a Linux prctl, read via /proc/self/status
     #[tokio::test]
     async fn no_new_privs_is_set_in_the_child() {
         let cfg = SandboxConfig {

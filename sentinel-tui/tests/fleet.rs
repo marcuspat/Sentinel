@@ -141,7 +141,11 @@ fn fake_ssh(dir: &Path) -> PathBuf {
     let script = bin.join("ssh");
     std::fs::write(
         &script,
-        "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$FAKE_SSH_LOG\"\nfor last; do :; done\neval \"$last\"\n",
+        // One file per invocation: two hosts dispatch concurrently and a shared
+        // append target interleaves argv mid-block on macOS's sh (one write per
+        // arg), which breaks the block assertions below. $$-suffixed shards are
+        // individually intact; read_ssh_log() stitches them back together.
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$FAKE_SSH_LOG.$$\"\nfor last; do :; done\neval \"$last\"\n",
     )
     .unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -158,6 +162,26 @@ fn fleet(dir: &Path, args: &[&str]) -> Output {
         .env("FAKE_SSH_LOG", dir.join("ssh.log"))
         .output()
         .unwrap()
+}
+
+/// Stitch the per-invocation ssh log shards back into one string. The fake
+/// ssh appends to `ssh.log.<pid>` — a single shared file interleaves argv
+/// mid-block when hosts dispatch concurrently.
+fn read_ssh_log(dir: &Path) -> String {
+    let mut shards: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("ssh.log."))
+        })
+        .collect();
+    shards.sort();
+    shards
+        .iter()
+        .map(|p| std::fs::read_to_string(p).unwrap())
+        .collect()
 }
 
 #[cfg(unix)]
@@ -189,7 +213,7 @@ fn fleet_round_trip_applies_policy_on_both_ends_and_audits_the_run() {
     );
 
     // The destination follows `--`, and the remote command is one argument.
-    let ssh_log = std::fs::read_to_string(dir.path().join("ssh.log")).unwrap();
+    let ssh_log = read_ssh_log(dir.path());
     assert!(ssh_log.contains("--\nops@web-01\n"), "{ssh_log}");
     assert!(
         ssh_log.contains("'sentinel' agent-exec 'disk_usage'"),
@@ -251,7 +275,7 @@ fn fleet_dispatches_nothing_without_approval_for_mutating_capabilities() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        !dir.path().join("ssh.log").exists(),
+        !dir.path().join("ssh.log").exists() && !read_ssh_log(dir.path()).contains("agent-exec"),
         "ssh must not be spawned"
     );
 
@@ -263,7 +287,7 @@ fn fleet_dispatches_nothing_without_approval_for_mutating_capabilities() {
         "{}",
         String::from_utf8_lossy(&out.stdout)
     );
-    let ssh_log = std::fs::read_to_string(dir.path().join("ssh.log")).unwrap();
+    let ssh_log = read_ssh_log(dir.path());
     assert!(
         ssh_log.contains("agent-exec --approved 'log_vacuum'"),
         "{ssh_log}"
@@ -345,7 +369,7 @@ fn fleet_skips_hosts_that_controller_policy_denies() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("prod-db: DENIED by policy"), "{stdout}");
     assert!(stdout.contains("1 denied"), "{stdout}");
-    let ssh_log = std::fs::read_to_string(dir.path().join("ssh.log")).unwrap();
+    let ssh_log = read_ssh_log(dir.path());
     assert!(
         ssh_log.contains("staging-1") && !ssh_log.contains("prod-db"),
         "{ssh_log}"
