@@ -275,8 +275,7 @@ fn fleet_dispatches_nothing_without_approval_for_mutating_capabilities() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        !dir.path().join("ssh.log").exists()
-            && !read_ssh_log(dir.path()).contains("agent-exec"),
+        !dir.path().join("ssh.log").exists() && !read_ssh_log(dir.path()).contains("agent-exec"),
         "ssh must not be spawned"
     );
 
