@@ -3,8 +3,20 @@ name: CI
 on:
   push:
     branches: ["main", "feat/**", "fix/**", "chore/**", "docs/**"]
+    # Docs-only pushes carry no Rust signal (2026-11-01 metered-burn trim);
+    # pushes block nothing, so skipping them is pure savings.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
   pull_request:
     branches: ["main"]
+
+# Superseded runs cancel instead of stacking: morning gate-round pushes
+# fired full matrix runs 3-4 minutes apart, all billed, all redundant —
+# the newest run for a ref always carries the latest code.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 # Least privilege: nothing here writes to the repository.
 permissions:
@@ -54,7 +66,13 @@ jobs:
       - name: cargo check
         run: cargo check --workspace --all-targets --locked
 
+      # Tests and clippy run on Linux only (2026-11-01): the macOS lane
+      # exists for darwin COMPILE breaks (#22) — that signal is `cargo
+      # check`. Running the full test/clippy suite there too billed macOS
+      # minutes at 10x for signal Linux already carries (#23 took the
+      # Linux-only tests out; this finishes the split).
       - name: cargo test
+        if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
           set -o pipefail
@@ -73,6 +91,7 @@ jobs:
           fi
 
       - name: cargo clippy
+        if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
           set -o pipefail
