@@ -13,6 +13,12 @@ read-only observations, proposes a structured plan, waits for explicit operator
 approval, then executes under a strict deny-by-default policy engine with a
 hash-chained audit log.
 
+> **🔗 Now integrated with [Turbo Rig](https://github.com/marcuspat/turbo-rig)** — the DevOps
+> tool for AI coding agents. Turbo Rig ships a Sentinel bridge: a deny-by-default plane policy
+> loaded by reference from its repo, a keyless hourly capability patrol (`agent-exec`, no LLM),
+> and a hash-chained, signature-verified audit surfaced as `sentinel_24h` on its live control
+> room — [turbo-rig.com](https://www.turbo-rig.com)
+
 ## 🎬 Demo
 
 ![sentinel listing capabilities and the deny-by-default policy](demo.gif)
